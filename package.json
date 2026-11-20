@@ -1,0 +1,280 @@
+{
+    "name": "antigravity-telegram-control",
+    "displayName": "Antigravity Telegram Control",
+    "description": "Control Antigravity Agent via Telegram and take screenshots.",
+    "version": "1.0.14",
+    "publisher": "acmatvjrus",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/acmavirus/antigravity-telegram-control.git"
+    },
+    "homepage": "https://github.com/acmavirus/antigravity-telegram-control",
+    "icon": "resources/logo.png",
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [
+        "onStartupFinished"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "antigravity-telegram-control.startBot",
+                "title": "Telegram: Start Bot"
+            },
+            {
+                "command": "antigravity-telegram-control.stopBot",
+                "title": "Telegram: Stop Bot"
+            },
+            {
+                "command": "antigravity-telegram-control.openSettings",
+                "title": "Telegram: Open Custom Settings"
+            },
+            {
+                "command": "antigravity-telegram-control.registerCommands",
+                "title": "Telegram: Register Slash Commands"
+            },
+            {
+                "command": "antigravity-telegram-control.deleteCommands",
+                "title": "Telegram: Delete Slash Commands"
+            },
+            {
+                "command": "antigravity-telegram-control.refreshQuota",
+                "title": "Telegram: Refresh Quota Status"
+            },
+            {
+                "command": "antigravity-telegram-control.injectScript",
+                "title": "Telegram: Inject Automation Script"
+            },
+            {
+                "command": "antigravity-telegram-control.uninstallScript",
+                "title": "Telegram: Remove Automation Script"
+            },
+            {
+                "command": "antigravity-telegram-control.saveCurrentAccount",
+                "title": "Telegram: Save Current Account Snapshot"
+            },
+            {
+                "command": "antigravity-telegram-control.switchAccount",
+                "title": "Telegram: Switch Account"
+            },
+            {
+                "command": "antigravity-telegram-control.rotateAccount",
+                "title": "Telegram: Rotate Next Account"
+            },
+            {
+                "command": "antigravity-telegram-control.testSoundAlert",
+                "title": "Telegram: Test Completion Sound Alert"
+            }
+        ],
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "telegram-control",
+                    "title": "Telegram Control",
+                    "icon": "resources/activity-bar.svg"
+                }
+            ]
+        },
+        "views": {
+            "telegram-control": [
+                {
+                    "id": "telegram-control-welcome",
+                    "name": "Telegram Settings",
+                    "type": "webview",
+                    "icon": "$(settings-gear)"
+                }
+            ]
+        },
+        "configuration": {
+            "title": "Antigravity Telegram Control",
+            "properties": {
+                "antigravityTelegramControl.botToken": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Your Telegram Bot Token from @BotFather"
+                },
+                "antigravityTelegramControl.allowedChatId": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Allowed Telegram Chat ID to control the agent"
+                },
+                "antigravityTelegramControl.debuggingPort": {
+                    "type": "number",
+                    "default": 9222,
+                    "description": "VS Code / Antigravity IDE remote debugging port (launch IDE with --remote-debugging-port=9222)"
+                },
+                "antigravityTelegramControl.language": {
+                    "type": "string",
+                    "default": "en",
+                    "description": "Language for Telegram bot messages"
+                },
+                "antigravityTelegramControl.agentsMsPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Full path to your agents.md file"
+                },
+                "antigravityTelegramControl.geminiMdPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Full path to your gemini.md file"
+                },
+                "antigravityTelegramControl.autoRetry": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Automatically retry if the agent fails or times out"
+                },
+                "antigravityTelegramControl.soundAlertEnabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Play a local system notification sound when the Agent finishes working or pauses with a question"
+                },
+                "antigravityTelegramControl.soundAlertFile": {
+                    "type": "string",
+                    "default": "",
+                    "description": "System notification sound filename (e.g. Windows Notify System Generic.wav). Leave empty for default system sound"
+                },
+                "antigravityTelegramControl.soundAlertVolume": {
+                    "type": "number",
+                    "default": 300,
+                    "minimum": 0,
+                    "maximum": 800,
+                    "description": "Sound boost/amplification percentage for local completion alerts (100 = original level, 300 = 3x boost)"
+                },
+                "antigravityTelegramControl.showStatusBar": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Show the Antigravity quota and credits in the VS Code status bar (bottom bar)"
+                },
+                "antigravityTelegramControl.statusBarUpdateInterval": {
+                    "type": "number",
+                    "default": 60,
+                    "description": "Interval in seconds to update the status bar"
+                },
+                "antigravityTelegramControl.autoAccept": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Automatically accept Antigravity Agent steps and terminal commands locally (independent of Telegram)"
+                },
+                "antigravityTelegramControl.autoAcceptInterval": {
+                    "type": "number",
+                    "default": 800,
+                    "description": "Interval in milliseconds to check and auto-accept agent actions (minimum: 200ms)"
+                },
+                "antigravityTelegramControl.autoNotifyQuestions": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Automatically detect and send Agent interactive questions with action buttons to Telegram in the background"
+                },
+                "antigravityTelegramControl.questionWatchIntervalMs": {
+                    "type": "number",
+                    "default": 2500,
+                    "description": "Interval in milliseconds to check for pending Agent questions in the background (default: 2500ms)"
+                },
+                "antigravityTelegramControl.scrollEnabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Automatically scroll the Antigravity chat panel while agent is generating output"
+                },
+                "antigravityTelegramControl.scrollPauseMs": {
+                    "type": "number",
+                    "default": 7000,
+                    "description": "Pause auto-scroll duration in milliseconds when user manually scrolls up in chat"
+                },
+                "antigravityTelegramControl.scrollIntervalMs": {
+                    "type": "number",
+                    "default": 500,
+                    "description": "Interval in milliseconds for chat panel auto-scroll checks"
+                },
+                "antigravityTelegramControl.enableMirror": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable local Web Mirror server to stream and interact with the Agent chat panel in any browser"
+                },
+                "antigravityTelegramControl.mirrorPort": {
+                    "type": "number",
+                    "default": 9999,
+                    "description": "Port to run the Web Mirror HTTP/WebSocket server (default: 9999)"
+                },
+                "antigravityTelegramControl.mirrorToken": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional security token. If set, accessing the web interface requires appending ?token=YOUR_TOKEN"
+                },
+                "antigravityTelegramControl.enableTunnel": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable automatic tunneling to expose the Web Mirror to the public internet"
+                },
+                "antigravityTelegramControl.tunnelType": {
+                    "type": "string",
+                    "default": "localhost.run",
+                    "enum": [
+                        "localhost.run",
+                        "cloudflare",
+                        "ngrok"
+                    ],
+                    "description": "Tunnel provider to use"
+                },
+                "antigravityTelegramControl.ngrokAuthToken": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Ngrok Authtoken (required if using ngrok and not configured globally)"
+                },
+                "antigravityTelegramControl.autoRotateAccounts": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Automatically rotate to the next saved account when quota limit is reached or credits run out"
+                },
+                "antigravityTelegramControl.clickPatterns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [
+                        "Allow",
+                        "Always Allow",
+                        "Run",
+                        "Keep Waiting",
+                        "Accept all",
+                        "Accept"
+                    ],
+                    "description": "List of button texts to auto-click"
+                }
+            }
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "pretest": "npm run compile && npm run lint",
+        "lint": "eslint src --ext ts",
+        "test": "node ./out/test/runTest.js"
+    },
+    "devDependencies": {
+        "@types/archiver": "^8.0.0",
+        "@types/node": "16.x",
+        "@types/vscode": "^1.75.0",
+        "@types/ws": "^8.18.1",
+        "@typescript-eslint/eslint-plugin": "^5.53.0",
+        "@typescript-eslint/parser": "^5.53.0",
+        "@vscode/vsce": "^2.15.0",
+        "eslint": "^8.34.0",
+        "typescript": "^4.9.5"
+    },
+    "dependencies": {
+        "archiver": "^7.0.1",
+        "ignore": "^7.0.12",
+        "screenshot-desktop": "^1.12.7",
+        "telegraf": "^4.12.2",
+        "ws": "^8.19.0"
+    },
+    "overrides": {
+        "undici": "5.28.4"
+    }
+}
