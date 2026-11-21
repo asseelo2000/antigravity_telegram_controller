@@ -3093,7 +3093,8 @@ export interface ChangesSnapshot {
 }
 
 /**
- * Expands all collapsed changes, steps, diffs, and tool execution accordions in the active Antigravity chat.
+ * Expands collapsed changes, steps, diffs, and tool execution accordions in the active Antigravity chat.
+ * Strictly scoped to agent turns to prevent opening context menus or unrelated IDE panels.
  */
 export async function expandAllChanges(port: number): Promise<{ expandedCount: number; success: boolean }> {
     try {
@@ -3117,71 +3118,82 @@ export async function expandAllChanges(port: number): Promise<{ expandedCount: n
                             return rect.width > 0 && rect.height > 0;
                         };
 
-                        // 1. Target standard HTML details elements
-                        const details = document.querySelectorAll('details:not([open])');
-                        details.forEach(d => {
-                            try {
-                                d.setAttribute('open', '');
-                                const summary = d.querySelector('summary') || d;
-                                summary.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                                count++;
-                            } catch (_) {}
-                        });
+                        // Scope strictly to conversation area to prevent clicking menus or navigation tabs
+                        const root = document.querySelector('[data-testid="conversation-view"], #conversation, #chat, #cascade, .chat-container, .messages-container, [class*="message-list"]') || document.body;
 
-                        // 2. Target aria-expanded="false" or data-state="collapsed"
-                        const collapsibles = document.querySelectorAll(
-                            '[aria-expanded="false"], [data-state="collapsed"], [data-expanded="false"]'
+                        // Identify all assistant turns and tool step sections
+                        const turnContainers = root.querySelectorAll(
+                            '.role-assistant, [class*="agent-turn"], [class*="assistant-turn"], [class*="turn-item"], [data-testid="step-item"], [class*="tool-call"], [class*="step-container"]'
                         );
-                        collapsibles.forEach(el => {
-                            const role = el.getAttribute('role') || '';
-                            const cls = (el.className || '').toString().toLowerCase();
 
-                            // Skip navigation items or menus
-                            if (role === 'menuitem' || role === 'tab' || cls.includes('navbar') || cls.includes('topbar')) {
-                                return;
-                            }
+                        const searchRoots = turnContainers.length > 0 ? Array.from(turnContainers) : [root];
 
-                            try {
-                                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                                count++;
-                            } catch (_) {}
-                        });
-
-                        // 3. Target chevron / arrow buttons inside tool calls or step sections
-                        const chevrons = document.querySelectorAll([
-                            '[class*="chevron-right"]',
-                            '[class*="codicon-chevron-right"]',
-                            '[class*="codicon-arrow-right"]',
-                            '[class*="toggle"][class*="collapsed"]',
-                            '[class*="disclosure"][class*="closed"]',
-                            'svg[class*="chevron-right"]',
-                            'svg[class*="arrow-right"]'
-                        ].join(', '));
-
-                        chevrons.forEach(ch => {
-                            const btn = ch.closest('button, [role="button"], summary, div[class*="header"]') || ch;
-                            if (isVisible(btn)) {
+                        searchRoots.forEach(scope => {
+                            // 1. Target standard HTML details elements inside agent messages
+                            const details = scope.querySelectorAll('details:not([open])');
+                            details.forEach(d => {
                                 try {
-                                    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                                    d.setAttribute('open', '');
+                                    const summary = d.querySelector('summary') || d;
+                                    summary.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
                                     count++;
                                 } catch (_) {}
-                            }
-                        });
+                            });
 
-                        // 4. Reveal any display:none bodies in steps/diffs
-                        const hiddenBodies = document.querySelectorAll([
-                            '[class*="diff"][style*="display: none"]',
-                            '[class*="step-body"][style*="display: none"]',
-                            '[class*="changes-content"][style*="display: none"]',
-                            '[class*="tool-output"][style*="display: none"]'
-                        ].join(', '));
+                            // 2. Target aria-expanded="false" or data-state="collapsed" strictly for tools/thoughts
+                            const collapsibles = scope.querySelectorAll(
+                                '[aria-expanded="false"], [data-state="collapsed"], [data-expanded="false"]'
+                            );
+                            collapsibles.forEach(el => {
+                                const role = el.getAttribute('role') || '';
+                                const hasPopup = el.getAttribute('aria-haspopup');
+                                const cls = (el.className || '').toString().toLowerCase();
+                                const title = (el.getAttribute('title') || '').toLowerCase();
+                                const text = (el.innerText || '').toLowerCase();
 
-                        hiddenBodies.forEach(el => {
-                            try {
-                                el.style.display = 'block';
-                                el.style.visibility = 'visible';
-                                count++;
-                            } catch (_) {}
+                                // Strictly skip context menus, dropdowns, 3-dots, options buttons
+                                if (hasPopup || role === 'menu' || role === 'menuitem' || role === 'tab' || 
+                                    cls.includes('menu') || cls.includes('navbar') || cls.includes('dots') ||
+                                    title.includes('more') || title.includes('action') || title.includes('option')) {
+                                    return;
+                                }
+
+                                // Target only tool executions, steps, thought processes, file inspections
+                                const isRelevantStep = 
+                                    text.includes('worked for') || text.includes('explored') || 
+                                    text.includes('analyzed') || text.includes('thinking') || 
+                                    text.includes('command') || text.includes('step') ||
+                                    cls.includes('step') || cls.includes('tool') || cls.includes('accordion') ||
+                                    cls.includes('thought') || cls.includes('header');
+
+                                if (isRelevantStep || scope !== root) {
+                                    try {
+                                        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                                        count++;
+                                    } catch (_) {}
+                                }
+                            });
+
+                            // 3. Target chevron / arrow buttons specifically inside tool calls or step sections
+                            const chevrons = scope.querySelectorAll([
+                                '[class*="tool-call"] [class*="chevron-right"]',
+                                '[class*="tool-call"] [class*="codicon-chevron-right"]',
+                                '[class*="step"] [class*="chevron-right"]',
+                                '[class*="step"] svg',
+                                '[class*="toggle"][class*="collapsed"]',
+                                'button[aria-label*="step" i][aria-expanded="false"]',
+                                'button[aria-label*="tool" i][aria-expanded="false"]'
+                            ].join(', '));
+
+                            chevrons.forEach(ch => {
+                                const btn = ch.closest('button, [role="button"], summary') || ch;
+                                if (isVisible(btn) && !btn.getAttribute('aria-haspopup')) {
+                                    try {
+                                        btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                                        count++;
+                                    } catch (_) {}
+                                }
+                            });
                         });
 
                         return count;
@@ -3202,6 +3214,63 @@ export async function expandAllChanges(port: number): Promise<{ expandedCount: n
     } catch (e: any) {
         console.warn('[CDP] expandAllChanges error:', e.message);
         return { expandedCount: 0, success: false };
+    }
+}
+
+export interface WorkbenchPartRect {
+    exists: boolean;
+    isOpen: boolean;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+/**
+ * Retrieves the bounding rectangle and open/closed visibility state of a major VS Code / Antigravity workbench part.
+ */
+export async function getWorkbenchPartBoundingRect(
+    port: number,
+    part: 'sidebar' | 'editor' | 'panel' | 'auxiliarybar'
+): Promise<WorkbenchPartRect | null> {
+    try {
+        const raw = await httpGet(`http://127.0.0.1:${port}/json`);
+        const targets: CdpTarget[] = JSON.parse(raw);
+        const pageTarget = targets.find(t => (t.type === 'page' || t.url?.includes('workbench.html')) && t.webSocketDebuggerUrl);
+        if (!pageTarget) return null;
+
+        const client = new CdpClient(pageTarget.webSocketDebuggerUrl!);
+        await client.connect();
+
+        const evalRes = await client.send('Runtime.evaluate', {
+            expression: `(() => {
+                const map = {
+                    sidebar: document.getElementById('workbench.parts.sidebar'),
+                    editor: document.getElementById('workbench.parts.editor'),
+                    panel: document.getElementById('workbench.parts.panel'),
+                    auxiliarybar: document.getElementById('workbench.parts.auxiliarybar') || document.querySelector('[data-testid="conversation-view"]')
+                };
+                const el = map['${part}'];
+                if (!el) return { exists: false, isOpen: false, x: 0, y: 0, width: 0, height: 0 };
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                const isOpen = rect.width > 40 && rect.height > 40 && style.display !== 'none' && style.visibility !== 'hidden';
+                return {
+                    exists: true,
+                    isOpen,
+                    x: Math.round(rect.x),
+                    y: Math.round(rect.y),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height)
+                };
+            })()`,
+            returnByValue: true
+        });
+
+        client.close();
+        return evalRes?.result?.value || null;
+    } catch (_) {
+        return null;
     }
 }
 

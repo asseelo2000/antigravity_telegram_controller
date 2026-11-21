@@ -311,6 +311,7 @@
     "dependencies": {
         "archiver": "^7.0.1",
         "ignore": "^7.0.12",
+        "jimp": "^1.6.1",
         "screenshot-desktop": "^1.12.7",
         "telegraf": "^4.12.2",
         "ws": "^8.19.0"

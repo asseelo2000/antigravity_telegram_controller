@@ -189,6 +189,55 @@ export async function findFileInWorkspace(fileName: string, root: string): Promi
 }
 
 /**
+ * Recursively searches for files matching a query inside a directory up to maxDepth.
+ */
+export function searchFilesInDirectory(
+    startDir: string,
+    query: string,
+    maxResults: number = 10,
+    currentDepth: number = 0,
+    maxDepth: number = 4
+): FileEntry[] {
+    const q = query.toLowerCase().trim();
+    if (!q) return [];
+    const results: FileEntry[] = [];
+
+    try {
+        if (!fs.existsSync(startDir)) return results;
+        const entries = fs.readdirSync(startDir, { withFileTypes: true });
+
+        for (const entry of entries) {
+            if (IGNORED_NAMES.has(entry.name) || (entry.name.startsWith('.') && entry.isDirectory())) {
+                continue;
+            }
+            const fullPath = path.join(startDir, entry.name);
+            if (entry.isDirectory()) {
+                if (currentDepth < maxDepth) {
+                    const subResults = searchFilesInDirectory(fullPath, query, maxResults - results.length, currentDepth + 1, maxDepth);
+                    results.push(...subResults);
+                    if (results.length >= maxResults) break;
+                }
+            } else {
+                if (entry.name.toLowerCase().includes(q)) {
+                    let size: number | undefined;
+                    try { size = fs.statSync(fullPath).size; } catch (_) {}
+                    results.push({
+                        name: entry.name,
+                        fullPath,
+                        isDirectory: false,
+                        size,
+                        extension: path.extname(entry.name).toLowerCase()
+                    });
+                    if (results.length >= maxResults) break;
+                }
+            }
+        }
+    } catch (_) {}
+
+    return results;
+}
+
+/**
  * Builds the interactive Telegram inline keyboard for directory navigation and file download.
  */
 export function buildFileBrowserKeyboard(
@@ -258,6 +307,18 @@ export function buildFileBrowserKeyboard(
     });
 
     rows.push(navRow);
+
+    // 4. File Search & Command Center / All Groups Navigation (Fix #17)
+    rows.push([
+        {
+            text: isAr ? '🔍 بحث عن ملف' : '🔍 Search File',
+            callback_data: `fb_search:${currentId}`
+        },
+        {
+            text: isAr ? '🎛️ كل المجموعات' : '🎛️ All Groups',
+            callback_data: 'widget_home:main'
+        }
+    ]);
 
     return rows;
 }
