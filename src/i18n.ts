@@ -148,6 +148,56 @@ export interface Translation {
     noPendingQuestion?: string;
     questionUsage?: string;
     questionAnswerError?: string;
+    questionContextFrame?: string;
+    questionScreenshotBtn?: string;
+    questionFetchingScreenshot?: string;
+    questionCurrentState?: string;
+    questionAlreadyAnswered?: string;
+    answerUsage?: string;
+    answerSent?: string;
+    // File browsing and download command labels and messages
+    filesNoWorkspace?: string;
+    filesListing?: string;
+    filesItems?: string;
+    filesGoUp?: string;
+    filesRoot?: string;
+    filesAccessDenied?: string;
+    filesSendingFile?: string;
+    filesTooLarge?: string;
+    filesReadError?: string;
+    getfileUsage?: string;
+    getfileNotFound?: string;
+    getfileIsDirectory?: string;
+    getfileSending?: string;
+    clipboardEmpty?: string;
+    clipboardContent?: string;
+    clipboardError?: string;
+    logDirNotFound?: string;
+    logFileNotFound?: string;
+    logError?: string;
+    // Extensions and sidebar views manager labels and messages
+    extManagerTitle?: string;
+    extManagerSubtitle?: string;
+    extActivating?: string;
+    extActivated?: string;
+    extActivateFailed?: string;
+    extRefresh?: string;
+    extBackToList?: string;
+    extScreenshotCaption?: string;
+    extScreenshotFailed?: string;
+    // Live changes expander labels and messages
+    expandExpanding?: string;
+    expandSuccess?: string;
+    expandNothingFound?: string;
+    expandGetText?: string;
+    expandRefresh?: string;
+    changesExtracting?: string;
+    changesTitle?: string;
+    changesFiles?: string;
+    changesCommands?: string;
+    changesSteps?: string;
+    changesRaw?: string;
+    changesNotFound?: string;
     // PC control and power management command labels and messages
     pcTitle?: string;
     pcShutdownConfirm?: string;
@@ -171,6 +221,43 @@ export interface Translation {
     soundAlertVolumeLabel?: string;
     testSoundBtn?: string;
     soundTestPlayed?: string;
+    // Conversation history command
+    historyUsage?: string;
+    historyFetching?: string;
+    historyEmpty?: string;
+    historyHeader?: string;
+    historyRoleUser?: string;
+    historyRoleAgent?: string;
+    // Command widget & search
+    menuTitle?: string;
+    menuWelcome?: string;
+    menuSubtitle?: string;
+    menuChooseGroup?: string;
+    menuChooseCommand?: string;
+    menuCmdNotFound?: string;
+    menuExecuting?: string;
+    menuProvideArgs?: string;
+    searchPrompt?: string;
+    searchResults?: string;
+    searchEnterQuery?: string;
+    // Status Dashboard command
+    statusTitle?: string;
+    statusFetching?: string;
+    statusAgentState?: string;
+    statusAgentIdle?: string;
+    statusAgentGenerating?: string;
+    statusActiveChat?: string;
+    statusTotalChats?: string;
+    statusPendingQuestion?: string;
+    statusSectionAgent?: string;
+    statusSectionQuota?: string;
+    statusSectionSystem?: string;
+    statusMemory?: string;
+    statusUptime?: string;
+    statusProcessor?: string;
+    statusCores?: string;
+    statusUsed?: string;
+    statusUnavailable?: string;
 }
 
 export const translations: Record<string, Translation> = {
@@ -322,6 +409,53 @@ export const translations: Record<string, Translation> = {
         noPendingQuestion: "ℹ️ No pending questions from the Agent right now.",
         questionUsage: "Usage: /question or /q – Check pending agent questions.",
         questionAnswerError: "❌ Failed to submit answer: {msg}",
+        questionContextFrame: "📸 Context Frame",
+        questionScreenshotBtn: "📸 Context Frame",
+        questionFetchingScreenshot: "📸 Capturing live context screenshot...",
+        questionCurrentState: "Agent Context Frame",
+        questionAlreadyAnswered: "⚠️ This question was already answered or is no longer waiting.",
+        answerUsage: "💡 Usage: /answer <option number or custom text>",
+        answerSent: "✅ Answer sent to Agent: *{answer}*",
+        filesNoWorkspace: "No workspace folder is currently open in VS Code.",
+        filesListing: "Folder Contents",
+        filesItems: "items",
+        filesGoUp: "Go Up",
+        filesRoot: "Workspace Root",
+        filesAccessDenied: "❌ Access denied: Path is outside the workspace.",
+        filesSendingFile: "📤 Sending file to chat...",
+        filesTooLarge: "❌ File is too large ({size}). Telegram limit is 50MB.",
+        filesReadError: "❌ Error reading file: {msg}",
+        getfileUsage: "💡 Usage: /getfile <file path or name>\nExample: /getfile src/extension.ts",
+        getfileNotFound: "❌ File not found: \"{path}\"",
+        getfileIsDirectory: "📁 \"{path}\" is a directory. Use /files to browse.",
+        getfileSending: "📤 Sending: {name}...",
+        clipboardEmpty: "📋 Clipboard is empty.",
+        clipboardContent: "Host Clipboard Content",
+        clipboardError: "❌ Failed to read clipboard: {msg}",
+        logDirNotFound: "❌ Log directory not found.",
+        logFileNotFound: "ℹ️ No recent log files found.",
+        logError: "❌ Failed to retrieve logs: {msg}",
+        extManagerTitle: "Extensions & Sidebar Views Manager",
+        extManagerSubtitle: "Select any sidebar view or extension below to focus it and capture a live screenshot of its panel and changes:",
+        extActivating: "Opening {name} and capturing view...",
+        extActivated: "View Activated",
+        extActivateFailed: "Failed to open view {name}.",
+        extRefresh: "🔄 Refresh Screenshot",
+        extBackToList: "🧩 Extensions List",
+        extScreenshotCaption: "Live screenshot of sidebar view",
+        extScreenshotFailed: "Could not capture screenshot of view.",
+        expandExpanding: "🔍 Expanding collapsed changes & steps...",
+        expandSuccess: "✅ Expanded {count} collapsed section(s). Here is the full view:",
+        expandNothingFound: "ℹ️ No collapsed sections found — here is the current view:",
+        expandGetText: "📋 Extract Text",
+        expandRefresh: "🔄 Refresh View",
+        changesExtracting: "📋 Extracting live changes and commands...",
+        changesTitle: "Live Agent Changes & Executed Steps",
+        changesFiles: "Modified / Viewed Files",
+        changesCommands: "Executed Commands",
+        changesSteps: "Tool Steps & Actions",
+        changesRaw: "Details",
+        changesNotFound: "ℹ️ No live changes or tool steps found in the active session.",
         // PC power and control messages
         pcTitle: "⚡ *PC Power & Quick Actions:*",
         pcShutdownConfirm: "⚠️ *Shutdown PC*\nAre you sure you want to shut down this computer?",
@@ -338,6 +472,40 @@ export const translations: Record<string, Translation> = {
         pcActionCancelled: "❌ Action cancelled.",
         pcSysInfoTitle: "💻 *System & Hardware Info:*",
         pcError: "❌ PC Control Error: {msg}",
+        historyUsage: "Usage: /history [count]\nExample: /history 5",
+        historyFetching: "📜 Fetching last {count} messages from active conversation...",
+        historyEmpty: "ℹ️ No conversation messages found in the active session.",
+        historyHeader: "Chat History (Last {count} turns)",
+        historyRoleUser: "User",
+        historyRoleAgent: "Antigravity Agent",
+        menuTitle: "Antigravity Command Center",
+        menuWelcome: "Welcome to Antigravity Telegram Control!",
+        menuSubtitle: "Remote-control and monitor your AI Agent, files, and workstation seamlessly.",
+        menuChooseGroup: "Select a category below to explore commands:",
+        menuChooseCommand: "Select a command to view details or execute:",
+        menuCmdNotFound: "❌ Command not found.",
+        menuExecuting: "⚡ Executing: {cmd}...",
+        menuProvideArgs: "ℹ️ This command requires parameters.\nPlease send:\n`{cmd} {hint}`",
+        searchPrompt: "Usage: /search <keyword>\nExample: /search quota",
+        searchResults: "🔍 Search results for: *{query}*",
+        searchEnterQuery: "🔍 Please send the command name or keyword to search for:",
+        statusTitle: "Antigravity Status Dashboard",
+        statusFetching: "🔍 Gathering complete status from IDE & System...",
+        statusAgentState: "State",
+        statusAgentIdle: "Idle (Ready)",
+        statusAgentGenerating: "Generating / Thinking",
+        statusActiveChat: "Active Chat",
+        statusTotalChats: "Total Conversations",
+        statusPendingQuestion: "Pending Question Waiting For Answer",
+        statusSectionAgent: "AI Agent Status",
+        statusSectionQuota: "Quota & Account",
+        statusSectionSystem: "Workstation Telemetry",
+        statusMemory: "Memory (RAM)",
+        statusUptime: "Uptime",
+        statusProcessor: "Processor (CPU)",
+        statusCores: "cores",
+        statusUsed: "used",
+        statusUnavailable: "Currently unavailable",
     },
     'vi': {
         welcome: "Bot đang hoạt động! Chat ID của bạn: `${id}`\n\nGõ /help để xem lệnh.",
@@ -1280,6 +1448,53 @@ export const translations: Record<string, Translation> = {
         noPendingQuestion: "ℹ️ لا توجد أسئلة معلقة من الوكيل حالياً.",
         questionUsage: "الاستخدام: /question أو /q – فحص والرد على أسئلة الوكيل المعلقة.",
         questionAnswerError: "❌ فشل إرسال الإجابة: {msg}",
+        questionContextFrame: "📸 لقطة السياق",
+        questionScreenshotBtn: "📸 لقطة السياق",
+        questionFetchingScreenshot: "📸 جاري التقاط لقطة شاشة للسياق...",
+        questionCurrentState: "إطار سياق الوكيل",
+        questionAlreadyAnswered: "⚠️ تم الرد على هذا السؤال بالفعل أو أنه لم يعد معلقاً.",
+        answerUsage: "💡 الاستخدام: /answer <رقم الخيار أو إجابتك النصية>",
+        answerSent: "✅ تم إرسال الإجابة إلى الوكيل: *{answer}*",
+        filesNoWorkspace: "لا يوجد مجلد مشروع مفتوح حالياً في المحرر.",
+        filesListing: "محتوى المجلد",
+        filesItems: "عنصر",
+        filesGoUp: "مجلد أعلى",
+        filesRoot: "جذر المشروع",
+        filesAccessDenied: "❌ تم رفض الوصول: المسار خارج نطاق المشروع.",
+        filesSendingFile: "📤 جاري إرسال الملف إلى المحادثة...",
+        filesTooLarge: "❌ حجم الملف كبير جداً ({size}). الحد الأقصى لتليجرام هو 50MB.",
+        filesReadError: "❌ خطأ أثناء قراءة الملف: {msg}",
+        getfileUsage: "💡 الاستخدام: /getfile <مسار أو اسم الملف>\nمثال: /getfile src/extension.ts",
+        getfileNotFound: "❌ الملف غير موجود: \"{path}\"",
+        getfileIsDirectory: "📁 \"{path}\" هو مجلد وليس ملفاً. استخدم /files للاستعراض.",
+        getfileSending: "📤 جاري إرسال الملف: {name}...",
+        clipboardEmpty: "📋 الحافظة فارغة.",
+        clipboardContent: "محتوى حافظة الجهاز",
+        clipboardError: "❌ خطأ أثناء قراءة الحافظة: {msg}",
+        logDirNotFound: "❌ تعذر العثور على مجلد السجلات.",
+        logFileNotFound: "ℹ️ لا توجد ملفات سجلات حديثة.",
+        logError: "❌ خطأ أثناء جلب ملف السجل: {msg}",
+        extManagerTitle: "لوحة التحكم بالإضافات والشريط الجانبي",
+        extManagerSubtitle: "اختر أي إضافة أو واجهة جانبية أدناه لفتحها في المحرر والتقاط لقطة شاشة حية لرؤية التغييرات والنتائج:",
+        extActivating: "جاري فتح {name} والتقاط الشاشة...",
+        extActivated: "تم فتح الواجهة",
+        extActivateFailed: "تعذر فتح واجهة {name}.",
+        extRefresh: "🔄 تحديث اللقطة",
+        extBackToList: "🧩 قائمة الإضافات",
+        extScreenshotCaption: "لقطة شاشة حية لنافذة الإضافة والشريط الجانبي",
+        extScreenshotFailed: "تعذر التقاط لقطة الشاشة للواجهة.",
+        expandExpanding: "🔍 جاري توسيع سهم التغييرات والأقسام المطوية...",
+        expandSuccess: "✅ تم توسيع {count} قسم مطوي بنجاح. إليك اللقطة الموسّعة:",
+        expandNothingFound: "ℹ️ لم يُعثر على أقسام مطوية — إليك اللقطة الحالية:",
+        expandGetText: "📋 استخراج النص",
+        expandRefresh: "🔄 تحديث اللقطة",
+        changesExtracting: "📋 جاري استخراج التغييرات والأوامر المنفذة...",
+        changesTitle: "التغييرات اللحظية والأوامر المنفذة",
+        changesFiles: "الملفات المعدلة أو المعروضة",
+        changesCommands: "الأوامر المنفذة",
+        changesSteps: "خطوات وأدوات التنفيذ",
+        changesRaw: "التفاصيل",
+        changesNotFound: "ℹ️ لم يُعثر على تغييرات جارية أو أوامر في الجلسة النشطة حالياً.",
         // PC power and control messages in Arabic
         pcTitle: "⚡ *أوامر التحكم السريع بالكمبيوتر:*",
         pcShutdownConfirm: "⚠️ *إيقاف تشغيل الكمبيوتر*\nهل أنت متأكد من رغبتك في إيقاف تشغيل الكمبيوتر؟",
@@ -1296,6 +1511,40 @@ export const translations: Record<string, Translation> = {
         pcActionCancelled: "❌ تم إلغاء الإجراء.",
         pcSysInfoTitle: "💻 *معلومات النظام والعتاد:*",
         pcError: "❌ خطأ في أمر التحكم: {msg}",
+        historyUsage: "الاستخدام: /history [عدد الرسائل]\nمثال: /history 5",
+        historyFetching: "📜 جاري استرجاع آخر {count} رسائل من المحادثة النشطة...",
+        historyEmpty: "ℹ️ لم يتم العثور على رسائل في المحادثة الحالية.",
+        historyHeader: "سجل المحادثة (آخر {count} رسائل)",
+        historyRoleUser: "المستخدم",
+        historyRoleAgent: "وكيل Antigravity",
+        menuTitle: "مركز تحكم Antigravity التفاعلي",
+        menuWelcome: "مرحباً بك في بوت Antigravity للتحكم!",
+        menuSubtitle: "تحكم وراقب وكيل الذكاء الاصطناعي، ومشاريعك، وجهازك بكل سهولة.",
+        menuChooseGroup: "اختر إحدى المجموعات أدناه لاستعراض الأوامر:",
+        menuChooseCommand: "اختر أمراً لعرض تفاصيله أو تنفيذه فوراً:",
+        menuCmdNotFound: "❌ الأمر غير موجود.",
+        menuExecuting: "⚡ جاري تنفيذ: {cmd}...",
+        menuProvideArgs: "ℹ️ هذا الأمر يحتاج إلى معاملات.\nيرجى كتابته مع المتغيرات المطلوبة:\n`{cmd} {hint}`",
+        searchPrompt: "الاستخدام: /search <كلمة البحث>\nمثال: /search quota",
+        searchResults: "🔍 نتائج البحث عن: *{query}*",
+        searchEnterQuery: "🔍 اكتب اسم الأمر أو الكلمة التي تبحث عنها:",
+        statusTitle: "لوحة الحالة الشاملة",
+        statusFetching: "🔍 جاري تجميع بيانات الحالة من بيئة التطوير والنظام...",
+        statusAgentState: "الحالة",
+        statusAgentIdle: "جاهز (خامل)",
+        statusAgentGenerating: "جارٍ التوليد والتفكير",
+        statusActiveChat: "المحادثة النشطة",
+        statusTotalChats: "إجمالي المحادثات",
+        statusPendingQuestion: "سؤال معلّق ينتظر الرد",
+        statusSectionAgent: "حالة الوكيل (Agent)",
+        statusSectionQuota: "الحساب والحصص (Quota)",
+        statusSectionSystem: "موارد الجهاز (System)",
+        statusMemory: "الذاكرة (RAM)",
+        statusUptime: "مدة التشغيل",
+        statusProcessor: "المعالج (CPU)",
+        statusCores: "نواة",
+        statusUsed: "مستخدم",
+        statusUnavailable: "غير متاح حالياً",
     },
     'id': {
         welcome: "Bot aktif! ID Chat Anda: `${id}`\n\nKetik /help untuk melihat perintah.",

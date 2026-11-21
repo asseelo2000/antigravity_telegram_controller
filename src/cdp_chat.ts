@@ -1203,6 +1203,119 @@ export async function getLatestAgentConversationText(port: number): Promise<stri
 }
 
 /**
+ * Interface representing a single turn or message in the active Antigravity agent conversation.
+ */
+export interface ConversationMessage {
+    role: 'user' | 'assistant';
+    text: string;
+}
+
+/**
+ * Retrieves the last N messages from the active Antigravity agent conversation.
+ */
+export async function getConversationHistory(port: number, limit: number = 5): Promise<ConversationMessage[]> {
+    let candidates: CdpTarget[] = [];
+    try {
+        const raw = await httpGet(`http://127.0.0.1:${port}/json`);
+        const targets: CdpTarget[] = JSON.parse(raw);
+        candidates = getFilteredChatCandidates(targets);
+    } catch (e: any) {
+        return [];
+    }
+
+    const safeLimit = Math.min(Math.max(limit, 1), 50);
+
+    for (const target of candidates) {
+        try {
+            const client = new CdpClient(target.webSocketDebuggerUrl!);
+            await client.connect();
+
+            const histResult = await client.send('Runtime.evaluate', {
+                expression: `
+                    (async function() {
+                        ${SCROLL_INJECTION_JS}
+
+                        const extractCleanText = (el) => {
+                            if (!el) return '';
+                            const clone = el.cloneNode(true);
+                            clone.querySelectorAll('style, script, button, .sr-only, [data-testid="worked-for-collapsible"], [data-testid="tool-group-collapsible"], [data-testid="turn-cards-container"], [data-testid="agent-loading"], [class*="thought"], [class*="thinking"], [class*="group/run-command"]').forEach(e => e.remove());
+                            return (clone.innerText || '').trim();
+                        };
+
+                        const messages = [];
+
+                        // Strategy 1: Modern Antigravity DOM with user-input-step and agent-response
+                        const userSteps = Array.from(document.querySelectorAll('[data-testid="user-input-step"]'));
+                        const agentResps = Array.from(document.querySelectorAll('[data-testid="agent-response"]'));
+
+                        if (userSteps.length > 0) {
+                            for (let i = 0; i < userSteps.length; i++) {
+                                const uStep = userSteps[i];
+                                const uContent = uStep.querySelector('[data-testid="user-message-content"] .whitespace-pre-wrap, [data-testid="user-message-content"], .whitespace-pre-wrap') || uStep;
+                                const uText = extractCleanText(uContent);
+                                if (uText) {
+                                    messages.push({ role: 'user', text: uText });
+                                }
+
+                                const nextStep = userSteps[i + 1] || null;
+                                const relatedResps = agentResps.filter(r => {
+                                    const isAfterThis = !!(uStep.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING);
+                                    const isBeforeNext = nextStep ? !!(r.compareDocumentPosition(nextStep) & Node.DOCUMENT_POSITION_FOLLOWING) : true;
+                                    return isAfterThis && isBeforeNext;
+                                });
+
+                                for (const r of relatedResps) {
+                                    const selectBlocks = Array.from(r.querySelectorAll('.leading-relaxed.select-text, div.px-2.py-1 > .select-text'))
+                                        .filter(b => !b.closest('[data-testid="worked-for-collapsible"], [data-testid="tool-group-collapsible"], [data-testid="turn-cards-container"], [data-testid="agent-loading"], button'));
+                                    
+                                    let rText = '';
+                                    if (selectBlocks.length > 0) {
+                                        rText = selectBlocks.map(extractCleanText).filter(Boolean).join('\\n\\n');
+                                    } else {
+                                        rText = extractCleanText(r);
+                                    }
+
+                                    if (rText) {
+                                        messages.push({ role: 'assistant', text: rText });
+                                    }
+                                }
+                            }
+                        }
+
+                        // Strategy 2: If no structured steps found, fallback to turn containers
+                        if (messages.length === 0) {
+                            const turns = Array.from(document.querySelectorAll('.scroll-mt-4, [class*="message-item"], [data-role], .conversation-turn'));
+                            for (const turn of turns) {
+                                const role = turn.getAttribute('data-role') || (turn.className.includes('user') || turn.className.includes('human') ? 'user' : 'assistant');
+                                const text = extractCleanText(turn);
+                                if (text) {
+                                    messages.push({ role, text });
+                                }
+                            }
+                        }
+
+                        return { found: messages.length > 0, messages: messages.slice(-${safeLimit}) };
+                    })()
+                `,
+                awaitPromise: true,
+                returnByValue: true
+            });
+
+            client.close();
+
+            const val = histResult?.result?.value;
+            if (val && val.found && Array.isArray(val.messages)) {
+                return val.messages;
+            }
+        } catch (e: any) {
+            console.warn(`[CDP] Error reading conversation history from ${target.title}:`, e.message);
+        }
+    }
+
+    return [];
+}
+
+/**
  * Interface representing an Antigravity agent conversation summary from the IDE.
  */
 export interface AgentConversationItem {
@@ -2966,6 +3079,255 @@ export async function answerAgentQuestion(
         message: lastError ? `CDP Error: ${lastError}` : 'No active question found to answer (modal may have closed).'
     };
 }
+
+/**
+ * Snapshot of current changes, modified files, commands, and steps extracted from Antigravity chat.
+ */
+export interface ChangesSnapshot {
+    success: boolean;
+    files: string[];
+    commands: string[];
+    steps: string[];
+    rawText?: string;
+    totalCount: number;
+}
+
+/**
+ * Expands all collapsed changes, steps, diffs, and tool execution accordions in the active Antigravity chat.
+ */
+export async function expandAllChanges(port: number): Promise<{ expandedCount: number; success: boolean }> {
+    try {
+        const raw = await httpGet(`http://127.0.0.1:${port}/json`);
+        const targets: CdpTarget[] = JSON.parse(raw);
+        const candidates = getFilteredChatCandidates(targets);
+
+        let totalExpanded = 0;
+
+        for (const target of candidates) {
+            try {
+                const client = new CdpClient(target.webSocketDebuggerUrl!);
+                await client.connect();
+
+                const evalRes = await client.send('Runtime.evaluate', {
+                    expression: `(() => {
+                        let count = 0;
+                        const isVisible = (el) => {
+                            if (!el) return false;
+                            const rect = el.getBoundingClientRect();
+                            return rect.width > 0 && rect.height > 0;
+                        };
+
+                        // 1. Target standard HTML details elements
+                        const details = document.querySelectorAll('details:not([open])');
+                        details.forEach(d => {
+                            try {
+                                d.setAttribute('open', '');
+                                const summary = d.querySelector('summary') || d;
+                                summary.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                                count++;
+                            } catch (_) {}
+                        });
+
+                        // 2. Target aria-expanded="false" or data-state="collapsed"
+                        const collapsibles = document.querySelectorAll(
+                            '[aria-expanded="false"], [data-state="collapsed"], [data-expanded="false"]'
+                        );
+                        collapsibles.forEach(el => {
+                            const role = el.getAttribute('role') || '';
+                            const cls = (el.className || '').toString().toLowerCase();
+
+                            // Skip navigation items or menus
+                            if (role === 'menuitem' || role === 'tab' || cls.includes('navbar') || cls.includes('topbar')) {
+                                return;
+                            }
+
+                            try {
+                                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                                count++;
+                            } catch (_) {}
+                        });
+
+                        // 3. Target chevron / arrow buttons inside tool calls or step sections
+                        const chevrons = document.querySelectorAll([
+                            '[class*="chevron-right"]',
+                            '[class*="codicon-chevron-right"]',
+                            '[class*="codicon-arrow-right"]',
+                            '[class*="toggle"][class*="collapsed"]',
+                            '[class*="disclosure"][class*="closed"]',
+                            'svg[class*="chevron-right"]',
+                            'svg[class*="arrow-right"]'
+                        ].join(', '));
+
+                        chevrons.forEach(ch => {
+                            const btn = ch.closest('button, [role="button"], summary, div[class*="header"]') || ch;
+                            if (isVisible(btn)) {
+                                try {
+                                    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                                    count++;
+                                } catch (_) {}
+                            }
+                        });
+
+                        // 4. Reveal any display:none bodies in steps/diffs
+                        const hiddenBodies = document.querySelectorAll([
+                            '[class*="diff"][style*="display: none"]',
+                            '[class*="step-body"][style*="display: none"]',
+                            '[class*="changes-content"][style*="display: none"]',
+                            '[class*="tool-output"][style*="display: none"]'
+                        ].join(', '));
+
+                        hiddenBodies.forEach(el => {
+                            try {
+                                el.style.display = 'block';
+                                el.style.visibility = 'visible';
+                                count++;
+                            } catch (_) {}
+                        });
+
+                        return count;
+                    })()`,
+                    returnByValue: true
+                });
+
+                client.close();
+
+                const c = evalRes?.result?.value;
+                if (typeof c === 'number' && c > 0) {
+                    totalExpanded += c;
+                }
+            } catch (_) {}
+        }
+
+        return { expandedCount: totalExpanded, success: true };
+    } catch (e: any) {
+        console.warn('[CDP] expandAllChanges error:', e.message);
+        return { expandedCount: 0, success: false };
+    }
+}
+
+/**
+ * Extracts currently executing or recently executed changes, modified files, terminal commands, and tool steps.
+ */
+export async function extractCurrentChanges(port: number): Promise<ChangesSnapshot> {
+    try {
+        const raw = await httpGet(`http://127.0.0.1:${port}/json`);
+        const targets: CdpTarget[] = JSON.parse(raw);
+        const candidates = getFilteredChatCandidates(targets);
+
+        for (const target of candidates) {
+            try {
+                const client = new CdpClient(target.webSocketDebuggerUrl!);
+                await client.connect();
+
+                const evalRes = await client.send('Runtime.evaluate', {
+                    expression: `(() => {
+                        const files = new Set();
+                        const commands = new Set();
+                        const steps = [];
+
+                        // 1. Files modified/viewed in steps or diffs
+                        const fileSelectors = [
+                            '[class*="file-name"]',
+                            '[class*="file-path"]',
+                            '[class*="diff-file"]',
+                            '[class*="resource-label"]',
+                            '[data-file]',
+                            'span[title*="/"]',
+                            'span[title*="\\\\"]'
+                        ];
+                        document.querySelectorAll(fileSelectors.join(', ')).forEach(el => {
+                            const text = (el.innerText || el.getAttribute('title') || '').trim();
+                            if (text && text.length > 2 && text.length < 250 && !text.includes('\\n')) {
+                                if (text.includes('.') || text.includes('/') || text.includes('\\\\')) {
+                                    files.add(text);
+                                }
+                            }
+                        });
+
+                        // 2. Commands executed in terminal/bash tools
+                        const cmdSelectors = [
+                            '[class*="command-step"]',
+                            '[class*="terminal-command"]',
+                            '[class*="tool-call-command"]',
+                            'code[class*="command"]',
+                            '[data-command]'
+                        ];
+                        document.querySelectorAll(cmdSelectors.join(', ')).forEach(el => {
+                            const text = (el.innerText || el.getAttribute('data-command') || '').trim();
+                            if (text && text.length > 1 && text.length < 300) {
+                                commands.add(text);
+                            }
+                        });
+
+                        // 3. Step titles & tool descriptions
+                        const stepSelectors = [
+                            '[class*="step-title"]',
+                            '[class*="tool-header"]',
+                            '[class*="action-title"]',
+                            '[class*="thought-title"]'
+                        ];
+                        document.querySelectorAll(stepSelectors.join(', ')).forEach(el => {
+                            const text = (el.innerText || '').trim();
+                            if (text && text.length > 3 && text.length < 200 && !steps.includes(text)) {
+                                steps.push(text);
+                            }
+                        });
+
+                        // 4. Raw tool snippet if structured queries are sparse
+                        let rawSnippet = '';
+                        const toolSection = document.querySelector('[class*="tool-call"], [class*="step-list"], [class*="changes"], [class*="diff-container"]');
+                        if (toolSection) {
+                            rawSnippet = (toolSection.innerText || '').substring(0, 2500);
+                        }
+
+                        return {
+                            files: Array.from(files).slice(0, 25),
+                            commands: Array.from(commands).slice(0, 25),
+                            steps: steps.slice(0, 20),
+                            rawText: rawSnippet
+                        };
+                    })()`,
+                    returnByValue: true
+                });
+
+                client.close();
+
+                const val = evalRes?.result?.value;
+                if (val) {
+                    const totalCount = (val.files?.length || 0) + (val.commands?.length || 0) + (val.steps?.length || 0);
+                    if (totalCount > 0 || (val.rawText && val.rawText.trim().length > 0)) {
+                        return {
+                            success: true,
+                            files: val.files || [],
+                            commands: val.commands || [],
+                            steps: val.steps || [],
+                            rawText: val.rawText || '',
+                            totalCount
+                        };
+                    }
+                }
+            } catch (_) {}
+        }
+
+        return {
+            success: false,
+            files: [],
+            commands: [],
+            steps: [],
+            totalCount: 0
+        };
+    } catch (e: any) {
+        console.warn('[CDP] extractCurrentChanges error:', e.message);
+        return {
+            success: false,
+            files: [],
+            commands: [],
+            steps: [],
+            totalCount: 0
+        };
+    }
+}
+
 
 
 

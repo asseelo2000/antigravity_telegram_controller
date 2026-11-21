@@ -287,3 +287,85 @@ export function getSystemInfo(): string {
 
     return report;
 }
+
+export interface SystemTelemetry {
+    hostname: string;
+    platform: string;
+    type: string;
+    release: string;
+    arch: string;
+    uptimeFormatted: string;
+    uptimeSec: number;
+    totalMemBytes: number;
+    freeMemBytes: number;
+    usedMemBytes: number;
+    totalMemGb: number;
+    usedMemGb: number;
+    freeMemGb: number;
+    memUsagePct: number;
+    cpuModel: string;
+    cpuCores: number;
+    ipAddresses: string[];
+}
+
+/**
+ * Retrieve structured system telemetry and metrics
+ */
+export function getSystemTelemetry(): SystemTelemetry {
+    const hostname = os.hostname();
+    const platform = os.platform();
+    const type = os.type();
+    const release = os.release();
+    const arch = os.arch();
+
+    const uptimeSec = os.uptime();
+    const days = Math.floor(uptimeSec / 86400);
+    const hours = Math.floor((uptimeSec % 86400) / 3600);
+    const minutes = Math.floor((uptimeSec % 3600) / 60);
+    const uptimeFormatted = `${days > 0 ? `${days}d ` : ''}${hours}h ${minutes}m`;
+
+    const totalMemBytes = os.totalmem();
+    const freeMemBytes = os.freemem();
+    const usedMemBytes = totalMemBytes - freeMemBytes;
+    const totalMemGb = parseFloat((totalMemBytes / (1024 ** 3)).toFixed(2));
+    const usedMemGb = parseFloat((usedMemBytes / (1024 ** 3)).toFixed(2));
+    const freeMemGb = parseFloat((freeMemBytes / (1024 ** 3)).toFixed(2));
+    const memUsagePct = parseFloat(((usedMemBytes / totalMemBytes) * 100).toFixed(1));
+
+    const cpus = os.cpus();
+    const cpuModel = cpus && cpus.length > 0 ? cpus[0].model.trim() : 'Unknown';
+    const cpuCores = cpus ? cpus.length : 0;
+
+    const networkInterfaces = os.networkInterfaces();
+    const ipAddresses: string[] = [];
+    for (const ifaceName of Object.keys(networkInterfaces)) {
+        const ifaceList = networkInterfaces[ifaceName];
+        if (ifaceList) {
+            for (const addr of ifaceList) {
+                if (addr.family === 'IPv4' && !addr.internal) {
+                    ipAddresses.push(`${addr.address} (${ifaceName})`);
+                }
+            }
+        }
+    }
+
+    return {
+        hostname,
+        platform,
+        type,
+        release,
+        arch,
+        uptimeFormatted,
+        uptimeSec,
+        totalMemBytes,
+        freeMemBytes,
+        usedMemBytes,
+        totalMemGb,
+        usedMemGb,
+        freeMemGb,
+        memUsagePct,
+        cpuModel,
+        cpuCores,
+        ipAddresses
+    };
+}

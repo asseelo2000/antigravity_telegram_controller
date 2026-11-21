@@ -8,8 +8,10 @@ import * as crypto from 'crypto';
 import { getSettingsHtml } from './settings_view';
 import { TelegramSettingsProvider } from './settings_provider';
 // CDP chat helpers for communication, screenshot capture, conversation reading, and interactive question handling
-import { sendViaCDP, waitForAgentResponse, checkAgentCurrentStatus, captureAgentScreenshot, stopAgent, clickRetryButton, getLatestAgentConversationText, getAgentConversationsList, startNewConversation, switchToConversation, getAvailableModels, switchModel, getPendingAgentQuestion, answerAgentQuestion, PendingAgentQuestion, AnswerQuestionResult } from './cdp_chat';
+import { sendViaCDP, waitForAgentResponse, checkAgentCurrentStatus, captureAgentScreenshot, stopAgent, clickRetryButton, getLatestAgentConversationText, getAgentConversationsList, startNewConversation, switchToConversation, getAvailableModels, switchModel, getPendingAgentQuestion, answerAgentQuestion, PendingAgentQuestion, AnswerQuestionResult, getConversationHistory, ConversationMessage, expandAllChanges, extractCurrentChanges, ChangesSnapshot } from './cdp_chat';
 import { translations, t } from './i18n';
+import { BotCommand, ALL_COMMANDS, CommandGroup, GROUP_META } from './command_definitions';
+import { buildCommandWidgetKeyboard, buildCommandDetailMessage, buildProgressBar, buildSmartQuestionKeyboard } from './command_widget';
 import * as os from 'os';
 import { fetchQuotaInfo } from './quota_checker';
 import { StatusBarManager } from './status_bar';
@@ -24,9 +26,18 @@ import { createProjectBackup, BackupResult, sendDocumentDirect } from './project
 // Proactive background watcher for detecting active agent questions and notifying Telegram
 import { AgentQuestionWatcher } from './question_watcher';
 // PC control helpers for remote shutdown, sleep, restart, lock, and system statistics
-import { shutdownSystem, restartSystem, sleepSystem, lockWorkstation, abortShutdown, getSystemInfo } from './pc_control';
+import { shutdownSystem, restartSystem, sleepSystem, lockWorkstation, abortShutdown, getSystemInfo, getSystemTelemetry, SystemTelemetry } from './pc_control';
 // Local sound alert watcher for agent completion and interactive question notifications
 import { AgentCompletionSoundWatcher, playNotificationSound, getAvailableSystemSounds } from './sound_alert';
+// Workspace file browser and file downloader helpers
+import {
+    getWorkspaceRoot, listDirectory, getFileIcon,
+    formatFileSize, findFileInWorkspace, buildFileBrowserKeyboard, pathRegistry
+} from './file_browser';
+// Sidebar extensions and views manager helpers
+import {
+    getDiscoveredSidebarViews, activateSidebarView, buildExtensionsKeyboard, SidebarViewItem
+} from './extensions_manager';
 
 let bot: Telegraf | undefined;
 let telegramAgent: https.Agent | undefined;
@@ -124,6 +135,10 @@ function getLanguage(): string {
 
 const SLASH_COMMANDS = [
     { command: 'start', description: 'Start the bot and get your Chat ID' },
+    { command: 'menu', description: 'Interactive visual Command Center widget' },
+    { command: 'history', description: 'Fetch last N messages: /history [count]' },
+    { command: 'status', description: 'Unified dashboard: Quota, Agent, and System status' },
+    { command: 'search', description: 'Search bot commands: /search <query>' },
     { command: 'screenshot', description: 'Capture a screenshot of the Antigravity agent' },
     { command: 'help', description: 'Show available commands' },
     { command: 'cmd', description: 'Execute shell command /cmd <command>' },
@@ -133,6 +148,16 @@ const SLASH_COMMANDS = [
     { command: 'question', description: 'Check and answer pending questions from the Agent' },
     // Command alias for question
     { command: 'q', description: 'Check and answer pending questions from the Agent' },
+    { command: 'answer', description: 'Answer pending agent question: /answer <option or text>' },
+    { command: 'ans', description: 'Answer pending agent question: /ans <option or text>' },
+    { command: 'files', description: 'Browse project folders & download files: /files [path]' },
+    { command: 'getfile', description: 'Download project file to phone: /getfile <path or name>' },
+    { command: 'getclipboard', description: 'Send PC clipboard text to Telegram' },
+    { command: 'getlog', description: 'Send latest IDE or extension error log' },
+    { command: 'extensions', description: 'Sidebar extensions & views: /extensions' },
+    { command: 'ext', description: 'Sidebar extensions & views: /ext' },
+    { command: 'expand', description: 'Expand collapsed changes in chat & send screenshot: /expand' },
+    { command: 'changes', description: 'Extract list of files, commands & steps: /changes' },
     { command: 'chats', description: 'List all Antigravity agent conversations' },
     { command: 'chat', description: 'List all Antigravity agent conversations' },
     { command: 'newchat', description: 'Start a new Antigravity agent conversation' },
@@ -449,6 +474,635 @@ async function sendToAgentChat(text: string): Promise<void> {
 
 const activeAlarms = new Set<string>();
 
+/**
+ * Generates and sends a complete, unified Status Dashboard to Telegram.
+ */
+async function sendStatusDashboardToTelegram(chatId: string, loadingMessageId?: number): Promise<void> {
+    if (!bot) return;
+
+    const port = getDebuggingPort();
+    const lang = getLanguage();
+    const isAr = lang === 'ar';
+
+    // Fetch all telemetry and statuses concurrently
+    const [agentStatusRes, questionRes, quotaRes, chatsRes] = await Promise.allSettled([
+        checkAgentCurrentStatus(port),
+        getPendingAgentQuestion(port),
+        fetchQuotaInfo(lang),
+        getAgentConversationsList(port)
+    ]);
+
+    const agentStatus = agentStatusRes.status === 'fulfilled' ? agentStatusRes.value : null;
+    const questionData = questionRes.status === 'fulfilled' ? questionRes.value : null;
+    const quota = quotaRes.status === 'fulfilled' ? quotaRes.value : null;
+    const chats = chatsRes.status === 'fulfilled' ? chatsRes.value : null;
+    const sys = getSystemTelemetry();
+
+    const nowTime = new Date().toLocaleTimeString(isAr ? 'ar-SA' : 'en-US');
+    const dashTitle = t('statusTitle') || (isAr ? 'لوحة الحالة الشاملة' : 'Antigravity Status Dashboard');
+
+    let msg = `🌌 *${dashTitle}*\n`;
+    msg += `🕐 \`${nowTime}\`\n`;
+    msg += '━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
+
+    // ─── 1. AI Agent Section ───
+    const agentHeader = t('statusSectionAgent') || (isAr ? 'حالة الوكيل (Agent)' : 'AI Agent Status');
+    msg += `🤖 *${agentHeader}*\n`;
+    if (agentStatus) {
+        const isGen = agentStatus.isGenerating;
+        const stateText = isGen
+            ? (t('statusAgentGenerating') || (isAr ? '⚡ جارٍ التوليد والتفكير' : '⚡ Generating / Thinking'))
+            : (t('statusAgentIdle') || (isAr ? '✅ جاهز (خامل)' : '✅ Idle (Ready)'));
+        msg += `  • ${t('statusAgentState') || (isAr ? 'الحالة' : 'State')}: ${stateText}\n`;
+    } else {
+        msg += `  • ${t('statusAgentState') || (isAr ? 'الحالة' : 'State')}: ⚠️ ${t('statusUnavailable') || (isAr ? 'غير متاح حالياً' : 'Unavailable')}\n`;
+    }
+
+    if (chats && chats.length > 0) {
+        const currentChat = chats.find(c => c.isCurrent);
+        if (currentChat) {
+            const cleanTitle = currentChat.title.length > 35 ? currentChat.title.substring(0, 32) + '...' : currentChat.title;
+            msg += `  • ${t('statusActiveChat') || (isAr ? 'المحادثة النشطة' : 'Active Chat')}: 💬 *#${currentChat.index} ${cleanTitle}*\n`;
+        }
+        msg += `  • ${t('statusTotalChats') || (isAr ? 'إجمالي المحادثات' : 'Total Chats')}: 📚 ${chats.length}\n`;
+    }
+
+    if (questionData && questionData.hasQuestion) {
+        const shortQ = questionData.questionText.length > 50 ? questionData.questionText.substring(0, 47) + '...' : questionData.questionText;
+        msg += `  • ❓ *${t('statusPendingQuestion') || (isAr ? 'سؤال معلّق' : 'Pending Question')}:* "${shortQ}"\n`;
+    }
+    msg += '\n';
+
+    // ─── 2. Quota & Account Section ───
+    const quotaHeader = t('statusSectionQuota') || (isAr ? 'الحساب والحصص (Quota)' : 'Quota & Account');
+    msg += `📊 *${quotaHeader}*\n`;
+    if (quota) {
+        if (quota.user_info) {
+            const u = quota.user_info;
+            const tierStr = u.tier || u.planName || '';
+            const userStr = u.name ? (u.email ? `${u.name} (${u.email})` : u.name) : (u.email || '');
+            if (userStr || tierStr) {
+                msg += `  • 👤 ${userStr}${tierStr ? ` [${tierStr}]` : ''}\n`;
+            }
+        }
+
+        if (quota.prompt_credits) {
+            const pc = quota.prompt_credits;
+            const bar = buildProgressBar(pc.remaining_percentage);
+            msg += `  • 💬 ${t('promptCreditsLabel') || 'Prompt Credits'}: [${bar}] ${pc.remaining_percentage.toFixed(1)}%\n`;
+        }
+
+        if (quota.flow_credits) {
+            const fc = quota.flow_credits;
+            const bar = buildProgressBar(fc.remaining_percentage);
+            msg += `  • 🔄 ${t('flowCreditsLabel') || 'Flow Credits'}: [${bar}] ${fc.remaining_percentage.toFixed(1)}%\n`;
+        }
+
+        if (quota.models && quota.models.length > 0) {
+            msg += `  • 🧠 ${isAr ? 'النماذج المتاحة:' : 'Top Model Limits:'}\n`;
+            const topModels = quota.models.slice(0, 3);
+            for (const m of topModels) {
+                const pct = m.remaining_percentage ?? (m.remaining_fraction !== undefined ? m.remaining_fraction * 100 : 0);
+                const bar = buildProgressBar(pct, 6);
+                const resetNotice = m.time_until_reset_formatted ? ` _(${m.time_until_reset_formatted})_` : '';
+                msg += `    - ${m.label}: [${bar}] ${pct.toFixed(0)}%${resetNotice}\n`;
+            }
+        }
+    } else {
+        msg += `  • ⚠️ ${t('statusUnavailable') || (isAr ? 'بيانات الحصة غير متاحة' : 'Quota info unavailable')}\n`;
+    }
+    msg += '\n';
+
+    // ─── 3. System & Telemetry Section ───
+    const sysHeader = t('statusSectionSystem') || (isAr ? 'موارد الجهاز (System)' : 'Workstation Telemetry');
+    msg += `💻 *${sysHeader}*\n`;
+    msg += `  • 🖥️ \`${sys.hostname}\` (${sys.platform} ${sys.arch})\n`;
+    const ramBar = buildProgressBar(100 - sys.memUsagePct);
+    msg += `  • 💾 ${t('statusMemory') || 'RAM'}: [${ramBar}] ${sys.usedMemGb} GB / ${sys.totalMemGb} GB (${sys.memUsagePct}% ${t('statusUsed') || (isAr ? 'مستخدم' : 'used')})\n`;
+    msg += `  • ⚡ ${t('statusProcessor') || 'CPU'}: ${sys.cpuModel} (${sys.cpuCores} ${t('statusCores') || (isAr ? 'نواة' : 'cores')})\n`;
+    msg += `  • ⏱️ ${t('statusUptime') || 'Uptime'}: ${sys.uptimeFormatted}\n`;
+
+    if (loadingMessageId) {
+        try {
+            await bot.telegram.deleteMessage(chatId, loadingMessageId);
+        } catch (_) {}
+    }
+
+    await bot.telegram.sendMessage(chatId, msg, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: isAr ? '🔄 تحديث الحالة' : '🔄 Refresh Status', callback_data: 'widget_exec:status' },
+                    { text: isAr ? '📸 لقطة شاشة' : '📸 Screenshot', callback_data: 'widget_exec:screenshot' }
+                ],
+                [
+                    { text: isAr ? '🎛️ لوحة الأوامر' : '🎛️ Command Center', callback_data: 'widget_home:main' }
+                ]
+            ]
+        }
+    });
+}
+
+/**
+ * Helper to send the interactive file and directory browser to Telegram.
+ */
+async function sendFileListing(
+    target: any,
+    targetPath: string,
+    workspaceRoot: string,
+    editMessage: boolean = false
+): Promise<void> {
+    const isAr = getLanguage() === 'ar';
+    const entries = listDirectory(targetPath, workspaceRoot);
+    const targetChatId = typeof target === 'string' || typeof target === 'number'
+        ? target.toString()
+        : (target?.chat?.id?.toString() || getAllowedChatId());
+
+    if (!targetChatId || !bot) {
+        return;
+    }
+
+    if (entries === null) {
+        const errorMsg = t('filesAccessDenied') || '❌ Access denied: Path is outside workspace.';
+        if (editMessage && typeof target !== 'string' && target?.editMessageText) {
+            try {
+                await target.editMessageText(errorMsg);
+                return;
+            } catch (_) {}
+        }
+        await bot.telegram.sendMessage(targetChatId, errorMsg);
+        return;
+    }
+
+    const relPath = path.relative(workspaceRoot, targetPath) || '.';
+    const listingTitle = t('filesListing') || (isAr ? 'محتوى المجلد' : 'Folder Contents');
+    const itemsLabel = t('filesItems') || (isAr ? 'عنصر' : 'items');
+
+    let msg = `📂 *${listingTitle}:* \`${relPath}\`\n`;
+    msg += `📊 ${entries.length} ${itemsLabel}\n`;
+    msg += '━'.repeat(24) + '\n\n';
+
+    const MAX_ITEMS_IN_MSG = 18;
+    const displayEntries = entries.slice(0, MAX_ITEMS_IN_MSG);
+
+    displayEntries.forEach(entry => {
+        const icon = getFileIcon(entry);
+        const sizeStr = !entry.isDirectory && entry.size !== undefined
+            ? ` _(${formatFileSize(entry.size)})_`
+            : '';
+        msg += `${icon} \`${entry.name}\`${sizeStr}\n`;
+    });
+
+    if (entries.length > MAX_ITEMS_IN_MSG) {
+        const remaining = entries.length - MAX_ITEMS_IN_MSG;
+        msg += `\n_${isAr ? `...و ${remaining} عنصر آخر` : `...and ${remaining} more items`}_\n`;
+    }
+
+    msg += `\n💡 _${isAr ? 'اضغط على مجلد للاستعراض أو على ملف لتحميله مباشرة للهاتف.' : 'Click a folder to browse or a file to download directly to your phone.'}_`;
+
+    const keyboard = buildFileBrowserKeyboard(entries, targetPath, workspaceRoot, isAr);
+
+    if (editMessage && typeof target !== 'string' && target?.editMessageText) {
+        try {
+            await target.editMessageText(msg, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: keyboard }
+            });
+            return;
+        } catch (_) {
+            // Fallback to sending new message if edit fails
+        }
+    }
+
+    await bot.telegram.sendMessage(targetChatId, msg, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: keyboard }
+    });
+}
+
+/**
+ * Helper to send any project or host file to Telegram as photo, small text code preview, or document.
+ */
+async function sendFileToChat(target: any, rawPath: string): Promise<void> {
+    const workspaceRoot = getWorkspaceRoot();
+    const targetChatId = typeof target === 'string' || typeof target === 'number'
+        ? target.toString()
+        : (target?.chat?.id?.toString() || getAllowedChatId());
+
+    if (!targetChatId || !bot) {
+        return;
+    }
+
+    const reply = async (text: string, extra?: any) => {
+        if (typeof target !== 'string' && target?.reply) {
+            return target.reply(text, extra);
+        }
+        return bot!.telegram.sendMessage(targetChatId, text, extra);
+    };
+
+    let resolvedPath: string | null = null;
+
+    // 1. Check if absolute path exists
+    if (path.isAbsolute(rawPath) && fs.existsSync(rawPath)) {
+        resolvedPath = path.normalize(rawPath);
+    }
+    // 2. Check if relative to workspaceRoot
+    else if (workspaceRoot && fs.existsSync(path.join(workspaceRoot, rawPath))) {
+        resolvedPath = path.normalize(path.join(workspaceRoot, rawPath));
+    }
+    // 3. Search in workspace by filename
+    else if (workspaceRoot) {
+        const found = await findFileInWorkspace(rawPath, workspaceRoot);
+        if (found && fs.existsSync(found)) {
+            resolvedPath = found;
+        }
+    }
+
+    if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+        await reply(t('getfileNotFound', { path: rawPath }) || `❌ File not found: "${rawPath}"`);
+        return;
+    }
+
+    try {
+        const stats = fs.statSync(resolvedPath);
+        if (stats.isDirectory()) {
+            await reply(t('getfileIsDirectory', { path: rawPath }) || `📁 "${rawPath}" is a directory. Use /files to browse.`);
+            return;
+        }
+
+        const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB Telegram limit
+        if (stats.size > MAX_FILE_SIZE) {
+            await reply(t('filesTooLarge', { size: formatFileSize(stats.size) }) || `❌ File too large (${formatFileSize(stats.size)}). Max limit: 50MB.`);
+            return;
+        }
+
+        const fileName = path.basename(resolvedPath);
+        const ext = path.extname(resolvedPath).toLowerCase();
+        const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.ico'];
+        const textExts = [
+            '.txt', '.md', '.ts', '.tsx', '.js', '.jsx', '.json', '.yaml',
+            '.yml', '.html', '.css', '.scss', '.py', '.cs', '.rs', '.go',
+            '.java', '.php', '.rb', '.sh', '.bat', '.ps1', '.sql', '.xml',
+            '.env', '.gitignore'
+        ];
+
+        // 1. If Image: send as Photo
+        if (imageExts.includes(ext)) {
+            const imgBuffer = fs.readFileSync(resolvedPath);
+            await sendTelegramPhoto(target, targetChatId, imgBuffer, {
+                caption: `📸 \`${fileName}\` (${formatFileSize(stats.size)})`,
+                parseMode: 'Markdown'
+            });
+            return;
+        }
+
+        // 2. If Small text file (<= 3000 bytes): send formatted preview
+        if (textExts.includes(ext) && stats.size <= 3000) {
+            const content = fs.readFileSync(resolvedPath, 'utf8');
+            const langHint = ext.replace('.', '') || 'text';
+            const previewMsg = `📄 \`${fileName}\` (${formatFileSize(stats.size)})\n\`\`\`${langHint}\n${content.substring(0, 3500)}\n\`\`\``;
+            await reply(previewMsg, { parse_mode: 'Markdown' });
+            return;
+        }
+
+        // 3. Send as Document
+        try {
+            if (typeof target !== 'string' && target?.replyWithDocument) {
+                await target.replyWithDocument(
+                    { source: resolvedPath, filename: fileName },
+                    { caption: `📎 \`${fileName}\` (${formatFileSize(stats.size)})` }
+                );
+            } else {
+                await bot.telegram.sendDocument(
+                    targetChatId,
+                    { source: resolvedPath, filename: fileName },
+                    { caption: `📎 \`${fileName}\` (${formatFileSize(stats.size)})` }
+                );
+            }
+        } catch (docErr: any) {
+            console.warn('[Telegram] sendDocument failed, attempting sendDocumentDirect fallback:', docErr.message);
+            const token = getToken();
+            if (token) {
+                await sendDocumentDirect(token, targetChatId, resolvedPath, fileName, `📎 \`${fileName}\` (${formatFileSize(stats.size)})`);
+            } else {
+                throw docErr;
+            }
+        }
+    } catch (e: any) {
+        console.error('[Telegram] Error sending file:', e);
+        await reply(t('filesReadError', { msg: e.message }) || `❌ Error reading file: ${e.message}`);
+    }
+}
+
+/**
+ * Helper to display the interactive Extensions & Sidebar Views menu.
+ */
+async function sendExtensionsMenu(
+    target: any,
+    expanded: boolean = false,
+    editMessage: boolean = false
+): Promise<void> {
+    const isAr = getLanguage() === 'ar';
+    const targetChatId = typeof target === 'string' || typeof target === 'number'
+        ? target.toString()
+        : (target?.chat?.id?.toString() || getAllowedChatId());
+
+    if (!targetChatId || !bot) {
+        return;
+    }
+
+    const title = t('extManagerTitle') || (isAr ? 'لوحة التحكم بالإضافات والشريط الجانبي' : 'Extensions & Sidebar Views Manager');
+    const subtitle = t('extManagerSubtitle') || (isAr
+        ? 'اختر أي إضافة أو واجهة جانبية أدناه لفتحها في المحرر والتقاط لقطة شاشة حية لرؤية التغييرات والنتائج:'
+        : 'Select any sidebar view or extension below to focus it and capture a live screenshot of its panel and changes:');
+
+    const msg = `🧩 *${title}*\n\n${subtitle}`;
+    const keyboard = buildExtensionsKeyboard(expanded, getLanguage());
+
+    if (editMessage && typeof target !== 'string' && target?.editMessageText) {
+        try {
+            await target.editMessageText(msg, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: keyboard }
+            });
+            return;
+        } catch (_) {
+            // Fallback to sending new message if edit fails
+        }
+    }
+
+    await bot.telegram.sendMessage(targetChatId, msg, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: keyboard }
+    });
+}
+
+/**
+ * Focuses a specific sidebar view in VS Code and sends a live screenshot to Telegram.
+ */
+async function openAndCaptureSidebarView(target: any, viewId: string): Promise<void> {
+    const isAr = getLanguage() === 'ar';
+    const targetChatId = typeof target === 'string' || typeof target === 'number'
+        ? target.toString()
+        : (target?.chat?.id?.toString() || getAllowedChatId());
+
+    if (!targetChatId || !bot) {
+        return;
+    }
+
+    const allViews = getDiscoveredSidebarViews();
+    const view = allViews.find(v => v.id === viewId);
+
+    if (!view) {
+        await bot.telegram.sendMessage(targetChatId, `❌ View not found: ${viewId}`);
+        return;
+    }
+
+    // Answer callback query if target is a callback context
+    if (typeof target !== 'string' && target?.answerCbQuery) {
+        try {
+            const activatingNotice = (t('extActivating') || 'Opening {name} and capturing view...')
+                .replace('{name}', view.label);
+            await target.answerCbQuery(activatingNotice);
+        } catch (_) {}
+    }
+
+    // Activate the view in VS Code
+    const activated = await activateSidebarView(view.command);
+    if (!activated) {
+        const failMsg = (t('extActivateFailed') || 'Failed to open view {name}.')
+            .replace('{name}', view.label);
+        await bot.telegram.sendMessage(targetChatId, `⚠️ ${failMsg}`);
+        return;
+    }
+
+    // Wait a brief moment for the view content to load and render
+    await new Promise(res => setTimeout(res, 1000));
+
+    const port = getDebuggingPort();
+    const caption = `${view.icon} *${view.label}*\n_${t('extScreenshotCaption') || (isAr ? 'لقطة شاشة حية لنافذة الإضافة والشريط الجانبي' : 'Live screenshot of sidebar view')}_`;
+    const actionButtons = [
+        [
+            { text: t('extRefresh') || (isAr ? '🔄 تحديث اللقطة' : '🔄 Refresh Screenshot'), callback_data: `ext_open:${view.id}` },
+            { text: t('extBackToList') || (isAr ? '🧩 قائمة الإضافات' : '🧩 Extensions List'), callback_data: 'ext_list:main' }
+        ],
+        [
+            { text: isAr ? '🎛️ لوحة الأوامر' : '🎛️ Command Center', callback_data: 'widget_home:main' }
+        ]
+    ];
+
+    try {
+        const { buffer } = await captureAgentScreenshot(port);
+        await sendTelegramPhoto(target, targetChatId, buffer, {
+            caption,
+            parseMode: 'Markdown',
+            replyMarkup: { inline_keyboard: actionButtons }
+        });
+    } catch (cdpErr: any) {
+        console.warn('[Telegram] CDP screenshot failed in openAndCaptureSidebarView, attempting desktop fallback:', cdpErr.message);
+        try {
+            const fallbackBuffer = await screenshot({ format: 'jpg' });
+            await sendTelegramPhoto(target, targetChatId, fallbackBuffer, {
+                caption,
+                parseMode: 'Markdown',
+                replyMarkup: { inline_keyboard: actionButtons }
+            });
+        } catch (fbErr: any) {
+            console.error('[Telegram] Fallback screenshot failed in openAndCaptureSidebarView:', fbErr.message);
+            await bot.telegram.sendMessage(targetChatId, `${view.icon} *${view.label}* — ${t('extActivated') || 'Activated'}\n⚠️ ${t('extScreenshotFailed') || 'Could not capture screenshot of view.'}`, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: actionButtons }
+            });
+        }
+    }
+}
+
+/**
+ * Expands all collapsed changes/steps accordions in Antigravity chat and sends an expanded screenshot.
+ */
+async function handleExpandCommand(target: any): Promise<void> {
+    const isAr = getLanguage() === 'ar';
+    const targetChatId = typeof target === 'string' || typeof target === 'number'
+        ? target.toString()
+        : (target?.chat?.id?.toString() || getAllowedChatId());
+
+    if (!targetChatId || !bot) {
+        return;
+    }
+
+    const reply = async (text: string, extra?: any) => {
+        if (typeof target !== 'string' && target?.reply) {
+            return target.reply(text, extra);
+        }
+        return bot!.telegram.sendMessage(targetChatId, text, extra);
+    };
+
+    if (typeof target !== 'string' && target?.answerCbQuery) {
+        try {
+            await target.answerCbQuery(t('expandExpanding') || 'Expanding collapsed sections...');
+        } catch (_) {}
+    }
+
+    const port = getDebuggingPort();
+    const noticeMsg = await reply(t('expandExpanding') || '🔍 Expanding collapsed changes & steps...');
+
+    try {
+        const { expandedCount } = await expandAllChanges(port);
+        // Wait 800ms for UI expansion rendering
+        await new Promise(res => setTimeout(res, 800));
+
+        const captionText = expandedCount > 0
+            ? (t('expandSuccess', { count: expandedCount.toString() }) || `✅ Expanded ${expandedCount} section(s).`)
+            : (t('expandNothingFound') || 'ℹ️ Current view:');
+
+        const keyboard = [
+            [
+                { text: t('expandGetText') || (isAr ? '📋 استخراج النص' : '📋 Extract Text'), callback_data: 'changes:get_text' },
+                { text: t('expandRefresh') || (isAr ? '🔄 تحديث' : '🔄 Refresh'), callback_data: 'changes:refresh' }
+            ],
+            [
+                { text: isAr ? '🎛️ لوحة الأوامر' : '🎛️ Command Center', callback_data: 'widget_home:main' }
+            ]
+        ];
+
+        try {
+            const { buffer } = await captureAgentScreenshot(port);
+            if (noticeMsg && noticeMsg.message_id) {
+                try { await bot.telegram.deleteMessage(targetChatId, noticeMsg.message_id); } catch (_) {}
+            }
+            await sendTelegramPhoto(target, targetChatId, buffer, {
+                caption: captionText,
+                parseMode: 'Markdown',
+                replyMarkup: { inline_keyboard: keyboard }
+            });
+        } catch (screenshotErr: any) {
+            console.warn('[Telegram] captureAgentScreenshot failed in expand, falling back to desktop:', screenshotErr.message);
+            const fallbackBuffer = await screenshot({ format: 'jpg' });
+            if (noticeMsg && noticeMsg.message_id) {
+                try { await bot.telegram.deleteMessage(targetChatId, noticeMsg.message_id); } catch (_) {}
+            }
+            await sendTelegramPhoto(target, targetChatId, fallbackBuffer, {
+                caption: captionText,
+                parseMode: 'Markdown',
+                replyMarkup: { inline_keyboard: keyboard }
+            });
+        }
+    } catch (err: any) {
+        console.error('[Telegram] Error in handleExpandCommand:', err);
+        await reply(t('error', { msg: err.message }));
+    }
+}
+
+/**
+ * Expands collapsed sections and extracts a structured report of modified files, commands, and steps.
+ */
+async function handleChangesCommand(target: any): Promise<void> {
+    const isAr = getLanguage() === 'ar';
+    const targetChatId = typeof target === 'string' || typeof target === 'number'
+        ? target.toString()
+        : (target?.chat?.id?.toString() || getAllowedChatId());
+
+    if (!targetChatId || !bot) {
+        return;
+    }
+
+    const reply = async (text: string, extra?: any) => {
+        if (typeof target !== 'string' && target?.reply) {
+            return target.reply(text, extra);
+        }
+        return bot!.telegram.sendMessage(targetChatId, text, extra);
+    };
+
+    if (typeof target !== 'string' && target?.answerCbQuery) {
+        try {
+            await target.answerCbQuery(t('changesExtracting') || 'Extracting live changes...');
+        } catch (_) {}
+    }
+
+    const port = getDebuggingPort();
+    const noticeMsg = await reply(t('changesExtracting') || '📋 Extracting live changes and commands...');
+
+    try {
+        // Expand first to ensure full DOM presence
+        await expandAllChanges(port);
+        await new Promise(res => setTimeout(res, 500));
+
+        const snapshot = await extractCurrentChanges(port);
+
+        if (noticeMsg && noticeMsg.message_id) {
+            try { await bot.telegram.deleteMessage(targetChatId, noticeMsg.message_id); } catch (_) {}
+        }
+
+        if (!snapshot.success || snapshot.totalCount === 0) {
+            await reply(t('changesNotFound') || 'ℹ️ No live changes or tool steps found.');
+            return;
+        }
+
+        let msg = `📋 *${t('changesTitle') || 'Live Agent Changes & Executed Steps'}*\n`;
+        msg += '━'.repeat(26) + '\n\n';
+
+        if (snapshot.files.length > 0) {
+            msg += `📝 *${t('changesFiles') || 'Modified / Viewed Files'}* (${snapshot.files.length}):\n`;
+            snapshot.files.forEach(f => {
+                msg += `  • \`${f}\`\n`;
+            });
+            msg += '\n';
+        }
+
+        if (snapshot.commands.length > 0) {
+            msg += `⚡ *${t('changesCommands') || 'Executed Commands'}* (${snapshot.commands.length}):\n`;
+            snapshot.commands.forEach(c => {
+                const cleanC = c.length > 120 ? c.substring(0, 117) + '...' : c;
+                msg += `  › \`${cleanC}\`\n`;
+            });
+            msg += '\n';
+        }
+
+        if (snapshot.steps.length > 0) {
+            msg += `🛠️ *${t('changesSteps') || 'Tool Steps & Actions'}* (${snapshot.steps.length}):\n`;
+            snapshot.steps.forEach(s => {
+                msg += `  › ${s}\n`;
+            });
+            msg += '\n';
+        }
+
+        if (snapshot.rawText && snapshot.files.length === 0 && snapshot.commands.length === 0 && snapshot.steps.length === 0) {
+            msg += `📄 *${t('changesRaw') || 'Details'}:*\n\`\`\`\n${snapshot.rawText.substring(0, 2000)}\n\`\`\``;
+        }
+
+        const keyboard = [
+            [
+                { text: isAr ? '📸 لقطة موسّعة' : '📸 Expanded Screenshot', callback_data: 'changes:screenshot' },
+                { text: isAr ? '🔄 تحديث' : '🔄 Refresh', callback_data: 'changes:refresh' }
+            ],
+            [
+                { text: isAr ? '🎛️ لوحة الأوامر' : '🎛️ Command Center', callback_data: 'widget_home:main' }
+            ]
+        ];
+
+        const MAX_LEN = 3900;
+        if (msg.length <= MAX_LEN) {
+            await reply(msg, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: keyboard }
+            });
+        } else {
+            const chunks = msg.match(/.{1,3800}/gs) ?? [msg];
+            for (let i = 0; i < chunks.length; i++) {
+                const isLast = i === chunks.length - 1;
+                await reply(chunks[i], {
+                    parse_mode: 'Markdown',
+                    reply_markup: isLast ? { inline_keyboard: keyboard } : undefined
+                });
+            }
+        }
+    } catch (err: any) {
+        console.error('[Telegram] Error in handleChangesCommand:', err);
+        await reply(t('error', { msg: err.message }));
+    }
+}
+
 // ─── Start bot ────────────────────────────────────────────────────────────────
 
 async function startBot(context: vscode.ExtensionContext): Promise<void> {
@@ -492,12 +1146,19 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
         });
 
         // ── Handlers ──
-        bot.start((ctx) => ctx.reply(
-            t('welcome').replace('${id}', ctx.chat.id.toString()),
-            { parse_mode: 'Markdown' }
-        ));
+        bot.start(async (ctx) => {
+            const lang = getLanguage();
+            const welcomeText = t('welcome').replace('${id}', ctx.chat.id.toString());
+            const keyboard = buildCommandWidgetKeyboard(undefined, undefined, lang);
+            await ctx.reply(welcomeText, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: keyboard }
+            });
+        });
 
-        bot.help((ctx) => ctx.reply(t('helpText')));
+        bot.help(async (ctx) => {
+            await handleMenuCommand(ctx, undefined, undefined, false);
+        });
 
         // Helper to format and send interactive agent questions with inline keyboard buttons to Telegram
         const sendQuestionToTelegram = async (target: any, questionData: PendingAgentQuestion, port: number): Promise<void> => {
@@ -517,23 +1178,11 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
 
                 const fullMsg = `${t('questionTitleText') || '❓ *Agent Question:*'}\n\n` +
                     `*${questionData.questionText}*\n\n` +
-                    optionsListText +
-                    `\n${t('questionCustomHint') || '💡 Click an option below, type its number (e.g. 1), or type a custom answer directly.'}`;
+                    (optionsListText ? `🔘 *${getLanguage() === 'ar' ? 'الخيارات المتاحة:' : 'Options:'}*\n${optionsListText}\n` : '') +
+                    `\n${t('questionCustomHint') || '💡 Click an option below, type its number (e.g. 1), or type /answer <text> directly.'}`;
 
-                // Build Inline Keyboard buttons for each option (up to 10 buttons)
-                const inlineKeyboard: any[][] = questionData.options.slice(0, 10).map((opt) => {
-                    const shortLabel = opt.text.length > 28 ? opt.text.substring(0, 25) + '...' : opt.text;
-                    return [{
-                        text: `${opt.index}️⃣ ${shortLabel}`,
-                        callback_data: `agent_question:opt:${opt.index}`
-                    }];
-                });
-
-                // Add Skip button
-                inlineKeyboard.push([{
-                    text: t('questionSkipBtn') || '⏭️ Skip',
-                    callback_data: 'agent_question:skip:0'
-                }]);
+                // Build smart, adaptive Inline Keyboard
+                const inlineKeyboard = buildSmartQuestionKeyboard(questionData.options, getLanguage());
 
                 // Try capturing screenshot of the question frame
                 const photoCaption = fullMsg.length > 1000 ? fullMsg.substring(0, 990) + '...' : fullMsg;
@@ -660,6 +1309,319 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
                 }
             }
         };
+
+        // Helper to display Command Widget Dashboard
+        async function handleMenuCommand(ctx: any, activeGroup?: CommandGroup, searchQuery?: string, editMessage: boolean = false) {
+            const lang = getLanguage();
+            const keyboard = buildCommandWidgetKeyboard(activeGroup, searchQuery, lang);
+            const title = t('menuTitle') || 'Antigravity Command Center';
+            const subtitle = searchQuery
+                ? (t('searchResults', { query: searchQuery }) || `🔍 Search results for: *${searchQuery}*`)
+                : activeGroup
+                    ? (lang === 'ar' ? `اختر أمراً من مجموعة: *${GROUP_META[activeGroup]?.labelAr}*` : `Select a command from: *${GROUP_META[activeGroup]?.label}*`)
+                    : (t('menuChooseGroup') || 'Select a category below to explore commands:');
+
+            const fullText = `🎛️ *${title}*\n\n${subtitle}`;
+
+            if (editMessage) {
+                try {
+                    await ctx.editMessageText(fullText, {
+                        parse_mode: 'Markdown',
+                        reply_markup: { inline_keyboard: keyboard }
+                    });
+                    return;
+                } catch (_) {
+                    // Fallback to sending a new reply if message cannot be edited
+                }
+            }
+
+            await ctx.reply(fullText, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: keyboard }
+            });
+        }
+
+        // Handler for /history and /hist commands to retrieve recent conversation turns from active session
+        async function handleHistoryCommand(ctx: any, customLimit?: number) {
+            if (allowedChatId && ctx.chat?.id.toString() !== allowedChatId) {
+                ctx.reply(t('unauthorized'));
+                return;
+            }
+
+            let limit = customLimit;
+            if (limit === undefined && ctx.message?.text) {
+                const parts = ctx.message.text.split(' ');
+                parts.shift();
+                const limitArg = parts.join(' ').trim();
+                limit = limitArg ? Math.min(Math.max(parseInt(limitArg, 10) || 5, 1), 20) : 5;
+            } else if (limit === undefined) {
+                limit = 5;
+            }
+
+            const port = getDebuggingPort();
+            const fetchingNotice = (t('historyFetching') || '📜 Fetching last {count} messages from active conversation...')
+                .replace('{count}', limit.toString());
+            const loadingMsg = await ctx.reply(fetchingNotice);
+
+            try {
+                const messages = await getConversationHistory(port, limit);
+
+                if (!messages || messages.length === 0) {
+                    await ctx.reply(t('historyEmpty') || 'ℹ️ No conversation messages found in the active session.');
+                    return;
+                }
+
+                const header = (t('historyHeader') || 'Chat History (Last {count} messages)')
+                    .replace('{count}', messages.length.toString());
+                let output = `📜 *${header}*\n`;
+                output += '━'.repeat(25) + '\n\n';
+
+                const roleUserLabel = t('historyRoleUser') || 'User';
+                const roleAgentLabel = t('historyRoleAgent') || 'Antigravity Agent';
+
+                messages.forEach((msg, idx) => {
+                    const icon = msg.role === 'user' ? '👤' : '🤖';
+                    const roleLabel = msg.role === 'user' ? roleUserLabel : roleAgentLabel;
+                    const maxLen = 800;
+                    const cleanText = msg.text.length > maxLen ? msg.text.substring(0, maxLen) + '...' : msg.text;
+                    output += `${icon} *${roleLabel}* (#${idx + 1}):\n${cleanText}\n\n`;
+                });
+
+                const MAX_LEN = 3900;
+                if (output.length <= MAX_LEN) {
+                    await ctx.reply(output, { parse_mode: 'Markdown' });
+                } else {
+                    const chunks: string[] = [];
+                    let current = '';
+                    const lines = output.split('\n');
+                    for (const line of lines) {
+                        if ((current + '\n' + line).length > MAX_LEN) {
+                            chunks.push(current);
+                            current = line;
+                        } else {
+                            current = current ? current + '\n' + line : line;
+                        }
+                    }
+                    if (current) chunks.push(current);
+
+                    for (const chunk of chunks) {
+                        await ctx.reply(chunk, { parse_mode: 'Markdown' });
+                    }
+                }
+            } catch (e: any) {
+                console.error('[Telegram] Error in /history command:', e);
+                ctx.reply(t('error', { msg: e.message }));
+            } finally {
+                try {
+                    if (loadingMsg && loadingMsg.message_id) {
+                        await ctx.deleteMessage(loadingMsg.message_id);
+                    }
+                } catch (_) {}
+            }
+        }
+
+        // Handler for /status, /stat, /dashboard to generate a unified status dashboard
+        async function handleStatusCommand(ctx: any) {
+            if (allowedChatId && ctx.chat?.id.toString() !== allowedChatId) {
+                ctx.reply(t('unauthorized'));
+                return;
+            }
+
+            const loadingMsg = await ctx.reply(t('statusFetching') || '🔍 Gathering complete status from IDE & System...');
+            await sendStatusDashboardToTelegram(ctx.chat.id.toString(), loadingMsg?.message_id);
+        }
+
+        // ─── Register Widget & History Commands ───
+
+        bot.command(['status', 'stat', 'dashboard'], async (ctx) => {
+            await handleStatusCommand(ctx);
+        });
+
+        bot.command(['menu', 'dashboard', 'commands'], async (ctx) => {
+            if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) { ctx.reply(t('unauthorized')); return; }
+            await handleMenuCommand(ctx, undefined, undefined, false);
+        });
+
+        bot.command(['search', 'find'], async (ctx) => {
+            if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) { ctx.reply(t('unauthorized')); return; }
+            const parts = ctx.message.text.split(' ');
+            parts.shift();
+            const query = parts.join(' ').trim();
+            if (!query) {
+                await ctx.reply(t('searchPrompt') || 'Usage: /search <keyword>');
+                return;
+            }
+            await handleMenuCommand(ctx, undefined, query, false);
+        });
+
+        bot.command(['history', 'hist'], async (ctx) => {
+            await handleHistoryCommand(ctx);
+        });
+
+        // ─── Command Widget Inline Actions ───
+
+        // Action: Navigate to Main Dashboard
+        bot.action('widget_home:main', async (ctx) => {
+            if (allowedChatId && ctx.chat?.id.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+            try { await ctx.answerCbQuery(); } catch (_) {}
+            await handleMenuCommand(ctx, undefined, undefined, true);
+        });
+
+        // Action: Open Group Commands
+        bot.action(/^widget_group:(.+)$/, async (ctx) => {
+            if (allowedChatId && ctx.chat?.id.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+            try { await ctx.answerCbQuery(); } catch (_) {}
+            const group = ctx.match[1] as CommandGroup;
+            await handleMenuCommand(ctx, group, undefined, true);
+        });
+
+        // Action: View Command Detail
+        bot.action(/^widget_cmd:(.+)$/, async (ctx) => {
+            if (allowedChatId && ctx.chat?.id.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+            try { await ctx.answerCbQuery(); } catch (_) {}
+            const cmdId = ctx.match[1];
+            const cmd = ALL_COMMANDS.find(c => c.id === cmdId);
+            if (!cmd) {
+                await ctx.reply(t('menuCmdNotFound') || 'Command not found.');
+                return;
+            }
+            const lang = getLanguage();
+            const { text, keyboard } = buildCommandDetailMessage(cmd, lang);
+            try {
+                await ctx.editMessageText(text, {
+                    parse_mode: 'Markdown',
+                    reply_markup: { inline_keyboard: keyboard }
+                });
+            } catch (_) {
+                await ctx.reply(text, {
+                    parse_mode: 'Markdown',
+                    reply_markup: { inline_keyboard: keyboard }
+                });
+            }
+        });
+
+        // Action: Prompt user to search
+        bot.action('widget_search:prompt', async (ctx) => {
+            if (allowedChatId && ctx.chat?.id.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+            try { await ctx.answerCbQuery(); } catch (_) {}
+            const promptMsg = t('searchEnterQuery') || '🔍 Type /search <name> to find commands (e.g. /search quota):';
+            await ctx.reply(promptMsg);
+        });
+
+        // Action: Header noop
+        bot.action('widget_header:noop', async (ctx) => {
+            try { await ctx.answerCbQuery(); } catch (_) {}
+        });
+
+        // Action: Execute command directly from Widget
+        bot.action(/^widget_exec:(.+)$/, async (ctx) => {
+            if (allowedChatId && ctx.chat?.id.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+
+            const cmdId = ctx.match[1];
+            const cmd = ALL_COMMANDS.find(c => c.id === cmdId);
+            if (!cmd) {
+                await ctx.answerCbQuery(t('menuCmdNotFound') || 'Command not found');
+                return;
+            }
+
+            if (cmd.hasArgs) {
+                try { await ctx.answerCbQuery(); } catch (_) {}
+                const hint = cmd.argHint ? ` ${cmd.argHint}` : '';
+                await ctx.reply(
+                    (t('menuProvideArgs') || 'ℹ️ This command requires parameters.\nPlease send:\n`{cmd} {hint}`')
+                        .replace('{cmd}', cmd.command)
+                        .replace('{hint}', hint),
+                    { parse_mode: 'Markdown' }
+                );
+                return;
+            }
+
+            try {
+                await ctx.answerCbQuery((t('menuExecuting') || '⚡ Executing: {cmd}...').replace('{cmd}', cmd.command));
+            } catch (_) {}
+
+            // Dispatch execution
+            switch (cmd.id) {
+                case 'status':
+                    await handleStatusCommand(ctx);
+                    break;
+                case 'history':
+                    await handleHistoryCommand(ctx, 5);
+                    break;
+                case 'screenshot': {
+                    const port = getDebuggingPort();
+                    try {
+                        const { buffer } = await captureAgentScreenshot(port);
+                        await sendTelegramPhoto(ctx, ctx.chat?.id, buffer);
+                    } catch (e: any) {
+                        try {
+                            const fallbackBuffer = await screenshot({ format: 'jpg' });
+                            await sendTelegramPhoto(ctx, ctx.chat?.id, fallbackBuffer);
+                        } catch (err: any) {
+                            ctx.reply(t('error', { msg: err.message }));
+                        }
+                    }
+                    break;
+                }
+                case 'stop': {
+                    const port = getDebuggingPort();
+                    try {
+                        const res = await stopAgent(port);
+                        if (res.success) await ctx.reply(t('agentStopped'));
+                        else await ctx.reply(t('agentNotRunning'));
+                    } catch (e: any) {
+                        ctx.reply(t('error', { msg: e.message }));
+                    }
+                    break;
+                }
+                case 'check':
+                case 'quota':
+                case 'chats':
+                case 'newchat':
+                case 'models':
+                case 'accounts':
+                case 'recent':
+                case 'backup':
+                case 'sysinfo':
+                case 'pc':
+                case 'sleep':
+                case 'lock':
+                case 'abort':
+                case 'question':
+                case 'alarm': {
+                    const fakeMsg: any = {
+                        message_id: (ctx.callbackQuery as any)?.message?.message_id || 0,
+                        date: Math.floor(Date.now() / 1000),
+                        chat: ctx.chat,
+                        from: ctx.from,
+                        text: cmd.command
+                    };
+                    await (bot as any)?.handleUpdate({
+                        update_id: Date.now(),
+                        message: fakeMsg
+                    });
+                    break;
+                }
+                default:
+                    await ctx.reply(`ℹ️ Send ${cmd.command} to run.`);
+                    break;
+            }
+        });
 
         bot.command('ask', async (ctx) => {
             if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) { ctx.reply(t('unauthorized')); return; }
@@ -1485,6 +2447,264 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
             }
         });
 
+        // Handler for /files, /file, /ls, /dir to browse workspace files interactively
+        bot.command(['files', 'file', 'ls', 'dir'], async (ctx) => {
+            if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) {
+                ctx.reply(t('unauthorized'));
+                return;
+            }
+
+            const workspaceRoot = getWorkspaceRoot();
+            if (!workspaceRoot) {
+                await ctx.reply(t('filesNoWorkspace') || 'No workspace folder open in VS Code.');
+                return;
+            }
+
+            const parts = ctx.message.text.split(' ');
+            parts.shift();
+            const subPath = parts.join(' ').trim();
+            const targetPath = subPath ? path.resolve(workspaceRoot, subPath) : workspaceRoot;
+
+            await sendFileListing(ctx, targetPath, workspaceRoot, false);
+        });
+
+        // Handler for /getfile, /get, /send to download any file to phone
+        bot.command(['getfile', 'get', 'send'], async (ctx) => {
+            if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) {
+                ctx.reply(t('unauthorized'));
+                return;
+            }
+
+            const parts = ctx.message.text.split(' ');
+            parts.shift();
+            const filePath = parts.join(' ').trim();
+
+            if (!filePath) {
+                await ctx.reply(t('getfileUsage') || '💡 Usage: /getfile <file path or name>');
+                return;
+            }
+
+            await sendFileToChat(ctx, filePath);
+        });
+
+        // Handler for /getclipboard, /clipboard, /clip to fetch host clipboard
+        bot.command(['getclipboard', 'clipboard', 'clip'], async (ctx) => {
+            if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) {
+                ctx.reply(t('unauthorized'));
+                return;
+            }
+
+            try {
+                const clipText = await vscode.env.clipboard.readText();
+                if (!clipText || clipText.trim().length === 0) {
+                    await ctx.reply(t('clipboardEmpty') || '📋 Clipboard is empty.');
+                    return;
+                }
+                const truncated = clipText.substring(0, 3800);
+                const title = t('clipboardContent') || 'Clipboard Content';
+                await ctx.reply(`📋 *${title}:*\n\`\`\`\n${truncated}\n\`\`\``, {
+                    parse_mode: 'Markdown'
+                });
+            } catch (e: any) {
+                ctx.reply(t('clipboardError', { msg: e.message }) || `❌ Clipboard error: ${e.message}`);
+            }
+        });
+
+        // Handler for /getlog, /log, /errors to send the latest log file
+        bot.command(['getlog', 'log', 'errors'], async (ctx) => {
+            if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) {
+                ctx.reply(t('unauthorized'));
+                return;
+            }
+
+            try {
+                const candidates: string[] = [
+                    path.join(process.env.APPDATA || os.homedir(), 'Antigravity IDE', 'logs'),
+                    path.join(process.env.APPDATA || os.homedir(), 'Code', 'logs'),
+                    path.join(os.homedir(), '.gemini', 'antigravity', 'logs'),
+                    extensionContext?.logUri?.fsPath || ''
+                ].filter(p => p && fs.existsSync(p));
+
+                let latestLogPath: string | null = null;
+                let latestMtime = 0;
+
+                for (const logDir of candidates) {
+                    try {
+                        const files = fs.readdirSync(logDir, { withFileTypes: true });
+                        for (const f of files) {
+                            if (!f.isDirectory() && (f.name.endsWith('.log') || f.name.endsWith('.txt'))) {
+                                const fullP = path.join(logDir, f.name);
+                                const mt = fs.statSync(fullP).mtimeMs;
+                                if (mt > latestMtime) {
+                                    latestMtime = mt;
+                                    latestLogPath = fullP;
+                                }
+                            }
+                        }
+                    } catch (_) {}
+                }
+
+                if (!latestLogPath) {
+                    await ctx.reply(t('logFileNotFound') || 'ℹ️ No log files found.');
+                    return;
+                }
+
+                await sendFileToChat(ctx, latestLogPath);
+            } catch (e: any) {
+                ctx.reply(t('logError', { msg: e.message }) || `❌ Error retrieving logs: ${e.message}`);
+            }
+        });
+
+        // Callback handler for browsing folder: bf:<id> or refreshing folder: rf:<id>
+        bot.action(/^(bf|rf):(.+)$/, async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+
+            const folderId = ctx.match[2];
+            const targetPath = pathRegistry.resolve(folderId);
+            const workspaceRoot = getWorkspaceRoot();
+
+            if (!workspaceRoot) {
+                await ctx.answerCbQuery(t('filesNoWorkspace') || 'No workspace open');
+                return;
+            }
+
+            if (!targetPath) {
+                await ctx.answerCbQuery(t('filesAccessDenied') || 'Path expired or not found');
+                return;
+            }
+
+            try {
+                await ctx.answerCbQuery();
+            } catch (_) {}
+
+            await sendFileListing(ctx, targetPath, workspaceRoot, true);
+        });
+
+        // Callback handler for downloading file: df:<id>
+        bot.action(/^df:(.+)$/, async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+
+            const fileId = ctx.match[1];
+            const filePath = pathRegistry.resolve(fileId);
+            const workspaceRoot = getWorkspaceRoot();
+
+            if (!workspaceRoot || !filePath) {
+                await ctx.answerCbQuery(t('filesAccessDenied') || 'File not found');
+                return;
+            }
+
+            try {
+                await ctx.answerCbQuery(t('filesSendingFile') || '📤 Sending file...');
+            } catch (_) {}
+
+            await sendFileToChat(ctx, filePath);
+        });
+
+        // Handler for /extensions, /ext, /views, /sidebar to inspect sidebar extensions & panels
+        bot.command(['extensions', 'ext', 'views', 'sidebar'], async (ctx) => {
+            if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) {
+                ctx.reply(t('unauthorized'));
+                return;
+            }
+
+            await sendExtensionsMenu(ctx, false, false);
+        });
+
+        // Callback handler for focusing and capturing a sidebar view
+        bot.action(/^ext_open:(.+)$/, async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+
+            const viewId = ctx.match[1];
+            await openAndCaptureSidebarView(ctx, viewId);
+        });
+
+        // Callback handler for expanding/collapsing extra extensions in the menu
+        bot.action(/^ext_toggle:(expand|collapse)$/, async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+
+            try { await ctx.answerCbQuery(); } catch (_) {}
+            const isExpanded = ctx.match[1] === 'expand';
+            await sendExtensionsMenu(ctx, isExpanded, true);
+        });
+
+        // Callback handler for section headers (no-op)
+        bot.action(/^ext_header:.+$/, async (ctx) => {
+            try { await ctx.answerCbQuery(); } catch (_) {}
+        });
+
+        // Callback handler for returning to the main extensions menu
+        bot.action(/^ext_list:main$/, async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+
+            try { await ctx.answerCbQuery(); } catch (_) {}
+            await sendExtensionsMenu(ctx, false, false);
+        });
+
+        // Handler for /expand to expand all collapsed steps/diffs in chat and send screenshot
+        bot.command(['expand', 'show', 'unfold'], async (ctx) => {
+            if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) {
+                ctx.reply(t('unauthorized'));
+                return;
+            }
+
+            await handleExpandCommand(ctx);
+        });
+
+        // Handler for /changes to extract modified files and executed commands as text
+        bot.command(['changes', 'diff', 'steps'], async (ctx) => {
+            if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) {
+                ctx.reply(t('unauthorized'));
+                return;
+            }
+
+            await handleChangesCommand(ctx);
+        });
+
+        // Callback action to extract changes text from screenshot card
+        bot.action('changes:get_text', async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+
+            await handleChangesCommand(ctx);
+        });
+
+        // Callback action to refresh expanded screenshot
+        bot.action('changes:refresh', async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+
+            await handleExpandCommand(ctx);
+        });
+
+        // Callback action to capture expanded screenshot from changes text card
+        bot.action('changes:screenshot', async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) {
+                await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+
+            await handleExpandCommand(ctx);
+        });
+
         bot.command('stop', async (ctx) => {
             if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) { ctx.reply(t('unauthorized')); return; }
 
@@ -2112,20 +3332,92 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
             }
         });
 
+        // Handler for /answer and /ans to answer pending agent questions via option number or free text
+        bot.command(['answer', 'ans'], async (ctx) => {
+            if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) {
+                ctx.reply(t('unauthorized'));
+                return;
+            }
+
+            const parts = ctx.message.text.split(' ');
+            parts.shift();
+            const rawAnswer = parts.join(' ').trim();
+
+            if (!rawAnswer) {
+                await ctx.reply(t('answerUsage') || '💡 Usage: /answer <option number or custom text>');
+                return;
+            }
+
+            const port = getDebuggingPort();
+            try {
+                const questionData = await getPendingAgentQuestion(port);
+                if (!questionData || !questionData.hasQuestion) {
+                    await ctx.reply(t('noPendingQuestion') || 'ℹ️ No pending questions from the Agent right now.');
+                    return;
+                }
+
+                const num = parseInt(rawAnswer, 10);
+                let res: AnswerQuestionResult;
+                if (!isNaN(num) && String(num) === rawAnswer && questionData.options.some(o => o.index === num)) {
+                    res = await answerAgentQuestion(port, { optionIndex: num, targetId: questionData.targetId });
+                } else if (rawAnswer.toLowerCase() === 'skip' || rawAnswer === 'تخطي') {
+                    res = await answerAgentQuestion(port, { isSkip: true, targetId: questionData.targetId });
+                } else {
+                    res = await answerAgentQuestion(port, { customText: rawAnswer, targetId: questionData.targetId });
+                }
+
+                if (res.success) {
+                    questionWatcher?.resetLastNotified();
+                    const answerLabel = res.skipped
+                        ? (t('questionSkipped') || '⏭️ Question was skipped.')
+                        : (res.chosenOptionText || res.customText || rawAnswer);
+                    await ctx.reply(t('questionAnswered', { answer: answerLabel }), { parse_mode: 'Markdown' });
+
+                    // Monitor subsequent agent response
+                    vscode.window.withProgress({
+                        location: vscode.ProgressLocation.Notification,
+                        title: t('agentThinking'),
+                        cancellable: false
+                    }, () => runAgentProgressCheck(ctx));
+                } else {
+                    await ctx.reply(t('questionAnswerError', { msg: res.message || 'Failed to submit answer' }));
+                }
+            } catch (err: any) {
+                console.error('[Telegram] Error in /answer command:', err);
+                ctx.reply(t('error', { msg: err.message }));
+            }
+        });
+
         // Callback query handler for interactive agent question inline buttons
-        bot.action(/^agent_question:(opt|skip):(\d+)$/, async (ctx) => {
+        bot.action(/^agent_question:(opt|skip|screenshot):(\d+)$/, async (ctx) => {
             if (allowedChatId && ctx.chat?.id.toString() !== allowedChatId) {
                 await ctx.answerCbQuery(t('unauthorized'));
+                return;
+            }
+
+            const actionType = ctx.match[1];
+            const optIndex = parseInt(ctx.match[2], 10);
+            const port = getDebuggingPort();
+
+            if (actionType === 'screenshot') {
+                try {
+                    await ctx.answerCbQuery(t('questionFetchingScreenshot') || '📸 Capturing screenshot...');
+                } catch (_) {}
+                try {
+                    const { buffer } = await captureAgentScreenshot(port);
+                    await sendTelegramPhoto(ctx, ctx.chat?.id, buffer, {
+                        caption: `📸 *${t('questionCurrentState') || 'Agent Context Frame'}*`,
+                        parseMode: 'Markdown'
+                    });
+                } catch (screenshotErr: any) {
+                    await ctx.reply(t('screenshotError', { msg: screenshotErr.message }));
+                }
                 return;
             }
 
             try {
                 await ctx.answerCbQuery();
             } catch (_) { /* ignore callback acknowledge error */ }
-
-            const actionType = ctx.match[1];
-            const optIndex = parseInt(ctx.match[2], 10);
-            const port = getDebuggingPort();
 
             try {
                 if (actionType === 'skip') {
@@ -2527,6 +3819,43 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }),
 
+        vscode.commands.registerCommand('antigravity-telegram-control.showMenu', async () => {
+            const targetChatId = getAllowedChatId();
+            if (!targetChatId || !bot) {
+                vscode.window.showWarningMessage('Telegram Bot is not running or Allowed Chat ID is not configured.');
+                return;
+            }
+            const lang = getLanguage();
+            const keyboard = buildCommandWidgetKeyboard(undefined, undefined, lang);
+            const title = t('menuTitle') || 'Antigravity Command Center';
+            const subtitle = t('menuChooseGroup') || 'Select a category below to explore commands:';
+            await bot.telegram.sendMessage(targetChatId, `🎛️ *${title}*\n\n${subtitle}`, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: keyboard }
+            });
+            vscode.window.showInformationMessage('Command Center sent to Telegram!');
+        }),
+
+        vscode.commands.registerCommand('antigravity-telegram-control.fetchHistory', async () => {
+            const port = getDebuggingPort();
+            const messages = await getConversationHistory(port, 5);
+            if (!messages || messages.length === 0) {
+                vscode.window.showInformationMessage('No active conversation messages found in Antigravity Agent.');
+                return;
+            }
+            vscode.window.showInformationMessage(`Fetched ${messages.length} messages from Agent session.`);
+        }),
+
+        vscode.commands.registerCommand('antigravity-telegram-control.statusDashboard', async () => {
+            const targetChatId = getAllowedChatId();
+            if (!targetChatId || !bot) {
+                vscode.window.showWarningMessage('Telegram Bot is not running or Allowed Chat ID is not configured.');
+                return;
+            }
+            await sendStatusDashboardToTelegram(targetChatId);
+            vscode.window.showInformationMessage('Status Dashboard sent to Telegram!');
+        }),
+
         vscode.commands.registerCommand('antigravity-telegram-control.openSettings', () => {
             const panel = vscode.window.createWebviewPanel(
                 'telegramSettings', 'Telegram Control Settings', vscode.ViewColumn.One,
@@ -2798,6 +4127,83 @@ export function activate(context: vscode.ExtensionContext) {
                     vscode.window.showErrorMessage(t('error', { msg: e.message }));
                 }
             });
+        }),
+
+        vscode.commands.registerCommand('antigravity-telegram-control.browseFiles', async () => {
+            const chatId = getAllowedChatId();
+            const workspaceRoot = getWorkspaceRoot();
+            if (!workspaceRoot) {
+                vscode.window.showWarningMessage('No open workspace folder found.');
+                return;
+            }
+            if (!chatId || !bot) {
+                vscode.window.showWarningMessage('Telegram bot is not running or no Chat ID is set.');
+                return;
+            }
+            await sendFileListing(chatId, workspaceRoot, workspaceRoot, false);
+            vscode.window.showInformationMessage('Sent files browser to Telegram!');
+        }),
+
+        vscode.commands.registerCommand('antigravity-telegram-control.getFile', async () => {
+            const filePath = await vscode.window.showInputBox({
+                prompt: 'Enter relative or absolute path of file to send to Telegram',
+                placeHolder: 'e.g. src/extension.ts or package.json'
+            });
+            if (!filePath) return;
+            const chatId = getAllowedChatId();
+            if (!chatId || !bot) {
+                vscode.window.showWarningMessage('Telegram bot is not running or no Chat ID is set.');
+                return;
+            }
+            await sendFileToChat(chatId, filePath);
+            vscode.window.showInformationMessage(`Sent ${filePath} to Telegram!`);
+        }),
+
+        vscode.commands.registerCommand('antigravity-telegram-control.getClipboard', async () => {
+            const chatId = getAllowedChatId();
+            if (!chatId || !bot) {
+                vscode.window.showWarningMessage('Telegram bot is not running or no Chat ID is set.');
+                return;
+            }
+            const clipText = await vscode.env.clipboard.readText();
+            if (!clipText || !clipText.trim()) {
+                vscode.window.showWarningMessage('Clipboard is empty.');
+                return;
+            }
+            await bot.telegram.sendMessage(chatId, `📋 *Clipboard Content:*\n\`\`\`\n${clipText.substring(0, 3800)}\n\`\`\``, {
+                parse_mode: 'Markdown'
+            });
+            vscode.window.showInformationMessage('Sent clipboard to Telegram!');
+        }),
+
+        vscode.commands.registerCommand('antigravity-telegram-control.showExtensions', async () => {
+            const chatId = getAllowedChatId();
+            if (!chatId || !bot) {
+                vscode.window.showWarningMessage('Telegram bot is not running or no Chat ID is set.');
+                return;
+            }
+            await sendExtensionsMenu(chatId, false, false);
+            vscode.window.showInformationMessage('Sent extensions menu to Telegram!');
+        }),
+
+        vscode.commands.registerCommand('antigravity-telegram-control.expandChanges', async () => {
+            const chatId = getAllowedChatId();
+            if (!chatId || !bot) {
+                vscode.window.showWarningMessage('Telegram bot is not running or no Chat ID is set.');
+                return;
+            }
+            await handleExpandCommand(chatId);
+            vscode.window.showInformationMessage('Sent expanded changes view to Telegram!');
+        }),
+
+        vscode.commands.registerCommand('antigravity-telegram-control.extractChanges', async () => {
+            const chatId = getAllowedChatId();
+            if (!chatId || !bot) {
+                vscode.window.showWarningMessage('Telegram bot is not running or no Chat ID is set.');
+                return;
+            }
+            await handleChangesCommand(chatId);
+            vscode.window.showInformationMessage('Sent changes report to Telegram!');
         })
     );
 

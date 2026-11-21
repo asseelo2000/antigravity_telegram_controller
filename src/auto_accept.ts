@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as url from 'url';
 import { getWorkbenchPath } from './workbench_injector';
+import { expandAllChanges } from './cdp_chat';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const WebSocket = require('ws') as typeof import('ws');
 
@@ -28,6 +29,7 @@ export class AutoAcceptManager implements vscode.Disposable {
     private scrollEnabled = true;
     private scrollPauseMs = 7000;
     private scrollIntervalMs = 500;
+    private autoExpandChanges = false;
 
     private pendingRequests = new Map<number, { resolve: Function, reject: Function }>();
 
@@ -52,6 +54,7 @@ export class AutoAcceptManager implements vscode.Disposable {
         this.scrollEnabled = config.get<boolean>('scrollEnabled') ?? true;
         this.scrollPauseMs = config.get<number>('scrollPauseMs') ?? 7000;
         this.scrollIntervalMs = config.get<number>('scrollIntervalMs') ?? 500;
+        this.autoExpandChanges = config.get<boolean>('autoExpandChanges') ?? false;
     }
 
     public getStats(): { totalClicks: number, clickStats: Record<string, number> } {
@@ -457,6 +460,10 @@ if ($global:clicked) { Write-Output 'CLICKED' }
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     this.evaluateClickerScript(ws);
                 }
+            }
+
+            if (this.autoExpandChanges) {
+                expandAllChanges(this.port).catch(() => {});
             }
         } catch (e: any) {
             // Quietly catch errors

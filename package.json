@@ -69,6 +69,42 @@
             {
                 "command": "antigravity-telegram-control.testSoundAlert",
                 "title": "Telegram: Test Completion Sound Alert"
+            },
+            {
+                "command": "antigravity-telegram-control.showMenu",
+                "title": "Telegram: Show Interactive Command Center"
+            },
+            {
+                "command": "antigravity-telegram-control.statusDashboard",
+                "title": "Telegram: Send Status Dashboard"
+            },
+            {
+                "command": "antigravity-telegram-control.fetchHistory",
+                "title": "Telegram: Fetch Conversation History"
+            },
+            {
+                "command": "antigravity-telegram-control.browseFiles",
+                "title": "Telegram: Browse Workspace Files"
+            },
+            {
+                "command": "antigravity-telegram-control.getFile",
+                "title": "Telegram: Download File to Chat"
+            },
+            {
+                "command": "antigravity-telegram-control.getClipboard",
+                "title": "Telegram: Send Clipboard to Chat"
+            },
+            {
+                "command": "antigravity-telegram-control.showExtensions",
+                "title": "Telegram: Show Sidebar Extensions & Views"
+            },
+            {
+                "command": "antigravity-telegram-control.expandChanges",
+                "title": "Telegram: Expand Chat Changes & Send Screenshot"
+            },
+            {
+                "command": "antigravity-telegram-control.extractChanges",
+                "title": "Telegram: Extract Modified Files & Commands"
             }
         ],
         "viewsContainers": {
@@ -127,6 +163,11 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Automatically retry if the agent fails or times out"
+                },
+                "antigravityTelegramControl.autoExpandChanges": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Automatically expand collapsed changes/steps sections in Antigravity chat during agent execution"
                 },
                 "antigravityTelegramControl.soundAlertEnabled": {
                     "type": "boolean",
