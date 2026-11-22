@@ -3274,6 +3274,122 @@ export interface WorkbenchPartRect {
     height: number;
 }
 
+export interface WorkbenchZoneCaptureResult {
+    buffer: Buffer;
+    isOpen: boolean;
+    zoneName: string;
+    width: number;
+    height: number;
+}
+
+/**
+ * Captures a screenshot of a specific workbench zone (sidebar, editor, terminal, auxiliarybar, or full workspace)
+ * directly via Chrome DevTools Protocol from the top-level workbench window.
+ */
+export async function captureWorkbenchZone(
+    port: number,
+    zone: 'left' | 'right' | 'editor' | 'terminal' | 'full'
+): Promise<WorkbenchZoneCaptureResult> {
+    const raw = await httpGet(`http://127.0.0.1:${port}/json`);
+    const targets: CdpTarget[] = JSON.parse(raw);
+    const pageTarget = targets.find(t => (t.type === 'page' || t.url?.includes('workbench.html')) && t.webSocketDebuggerUrl);
+    if (!pageTarget || !pageTarget.webSocketDebuggerUrl) {
+        throw new Error(`Workbench page target not found on port ${port}. Ensure IDE is running with --remote-debugging-port=${port}`);
+    }
+
+    const client = new CdpClient(pageTarget.webSocketDebuggerUrl);
+    await client.connect();
+
+    try {
+        const evalRes = await client.send('Runtime.evaluate', {
+            expression: `(() => {
+                const toRect = (el) => {
+                    if (!el) return { exists: false, isOpen: false, x: 0, y: 0, width: 0, height: 0 };
+                    const r = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    const isOpen = r.width > 30 && r.height > 30 && style.display !== 'none' && style.visibility !== 'hidden';
+                    return {
+                        exists: true,
+                        isOpen,
+                        x: Math.max(0, Math.round(r.x)),
+                        y: Math.max(0, Math.round(r.y)),
+                        width: Math.max(1, Math.round(r.width)),
+                        height: Math.max(1, Math.round(r.height))
+                    };
+                };
+
+                const sidebarEl = document.getElementById('workbench.parts.sidebar');
+                const editorEl = document.getElementById('workbench.parts.editor');
+                const panelEl = document.getElementById('workbench.parts.panel');
+                
+                let auxEl = document.getElementById('workbench.parts.auxiliarybar');
+                if (!auxEl || auxEl.getBoundingClientRect().width < 30) {
+                    const iframes = Array.from(document.querySelectorAll('iframe'));
+                    const chatIframe = iframes.find(f => (f.src || '').includes('extensionView=true') || (f.src || '').includes('vscode-webview'));
+                    if (chatIframe && chatIframe.getBoundingClientRect().width > 30) {
+                        auxEl = chatIframe;
+                    }
+                }
+
+                const map = {
+                    left: toRect(sidebarEl),
+                    editor: toRect(editorEl),
+                    terminal: toRect(panelEl),
+                    right: toRect(auxEl),
+                    full: { exists: true, isOpen: true, x: 0, y: 0, width: window.innerWidth, height: window.innerHeight }
+                };
+
+                return map['${zone}'];
+            })()`,
+            returnByValue: true
+        });
+
+        const partRect = evalRes?.result?.value;
+        if (!partRect) {
+            throw new Error(`Failed to measure coordinates for zone ${zone}`);
+        }
+
+        if (zone !== 'full' && !partRect.isOpen) {
+            return {
+                buffer: Buffer.alloc(0),
+                isOpen: false,
+                zoneName: zone,
+                width: 0,
+                height: 0
+            };
+        }
+
+        const clip = zone === 'full' ? undefined : {
+            x: Math.max(0, Math.floor(partRect.x)),
+            y: Math.max(0, Math.floor(partRect.y)),
+            width: Math.max(1, Math.floor(partRect.width)),
+            height: Math.max(1, Math.floor(partRect.height)),
+            scale: 1
+        };
+
+        const shotRes = await client.send('Page.captureScreenshot', {
+            format: 'jpeg',
+            quality: 85,
+            clip
+        });
+
+        if (!shotRes || !shotRes.data) {
+            throw new Error(`CDP Page.captureScreenshot returned empty data for zone ${zone}`);
+        }
+
+        const buffer = Buffer.from(shotRes.data, 'base64');
+        return {
+            buffer,
+            isOpen: true,
+            zoneName: zone,
+            width: partRect.width,
+            height: partRect.height
+        };
+    } finally {
+        client.close();
+    }
+}
+
 /**
  * Retrieves the bounding rectangle and open/closed visibility state of a major VS Code / Antigravity workbench part.
  */
@@ -3292,17 +3408,25 @@ export async function getWorkbenchPartBoundingRect(
 
         const evalRes = await client.send('Runtime.evaluate', {
             expression: `(() => {
+                let auxEl = document.getElementById('workbench.parts.auxiliarybar');
+                if (!auxEl || auxEl.getBoundingClientRect().width < 30) {
+                    const iframes = Array.from(document.querySelectorAll('iframe'));
+                    const chatIframe = iframes.find(f => (f.src || '').includes('extensionView=true') || (f.src || '').includes('vscode-webview'));
+                    if (chatIframe && chatIframe.getBoundingClientRect().width > 30) {
+                        auxEl = chatIframe;
+                    }
+                }
                 const map = {
                     sidebar: document.getElementById('workbench.parts.sidebar'),
                     editor: document.getElementById('workbench.parts.editor'),
                     panel: document.getElementById('workbench.parts.panel'),
-                    auxiliarybar: document.getElementById('workbench.parts.auxiliarybar') || document.querySelector('[data-testid="conversation-view"]')
+                    auxiliarybar: auxEl
                 };
                 const el = map['${part}'];
                 if (!el) return { exists: false, isOpen: false, x: 0, y: 0, width: 0, height: 0 };
                 const rect = el.getBoundingClientRect();
                 const style = window.getComputedStyle(el);
-                const isOpen = rect.width > 40 && rect.height > 40 && style.display !== 'none' && style.visibility !== 'hidden';
+                const isOpen = rect.width > 30 && rect.height > 30 && style.display !== 'none' && style.visibility !== 'hidden';
                 return {
                     exists: true,
                     isOpen,

@@ -9,7 +9,7 @@ import { Jimp } from 'jimp';
 import { getSettingsHtml } from './settings_view';
 import { TelegramSettingsProvider } from './settings_provider';
 // CDP chat helpers for communication, screenshot capture, conversation reading, and interactive question handling
-import { sendViaCDP, waitForAgentResponse, checkAgentCurrentStatus, captureAgentScreenshot, stopAgent, clickRetryButton, getLatestAgentConversationText, getAgentConversationsList, startNewConversation, switchToConversation, getAvailableModels, switchModel, getPendingAgentQuestion, answerAgentQuestion, PendingAgentQuestion, AnswerQuestionResult, getConversationHistory, ConversationMessage, expandAllChanges, extractCurrentChanges, ChangesSnapshot, getWorkbenchPartBoundingRect } from './cdp_chat';
+import { sendViaCDP, waitForAgentResponse, checkAgentCurrentStatus, captureAgentScreenshot, stopAgent, clickRetryButton, getLatestAgentConversationText, getAgentConversationsList, startNewConversation, switchToConversation, getAvailableModels, switchModel, getPendingAgentQuestion, answerAgentQuestion, PendingAgentQuestion, AnswerQuestionResult, getConversationHistory, ConversationMessage, expandAllChanges, extractCurrentChanges, ChangesSnapshot, getWorkbenchPartBoundingRect, captureWorkbenchZone } from './cdp_chat';
 import { translations, t } from './i18n';
 import { BotCommand, ALL_COMMANDS, CommandGroup, GROUP_META } from './command_definitions';
 import { buildCommandWidgetKeyboard, buildCommandDetailMessage, buildProgressBar, buildSmartQuestionKeyboard } from './command_widget';
@@ -923,76 +923,64 @@ async function checkIsZoneOpen(zone: WorkspaceZone): Promise<boolean> {
 }
 
 /**
- * Captures a cropped screenshot of the specified workspace zone using Jimp (Fix #7, #10, #12, #13, #14).
+ * Captures a cropped screenshot of the specified workspace zone directly via CDP with desktop fallback (Fix #7, #10, #12, #13, #14).
  */
 async function captureZoneBuffer(zone: WorkspaceZone): Promise<Buffer> {
-    const fullBuffer = await screenshot({ format: 'png' });
-    if (zone === 'full') {
-        return fullBuffer;
+    const port = getDebuggingPort();
+    try {
+        const result = await captureWorkbenchZone(port, zone);
+        if (result.isOpen && result.buffer && result.buffer.length > 0) {
+            return result.buffer;
+        }
+        if (!result.isOpen && zone !== 'full') {
+            throw new Error(`Zone ${zone} is currently closed`);
+        }
+    } catch (cdpErr: any) {
+        console.warn(`[Screenshot] CDP zone capture failed for ${zone}:`, cdpErr.message);
+        if (cdpErr.message && cdpErr.message.includes('closed')) {
+            throw cdpErr;
+        }
     }
 
+    // Secondary fallback: only attempt desktop screenshot if CDP connection failed entirely
     try {
+        const fullBuffer = await screenshot({ format: 'png' });
+        if (zone === 'full') {
+            return fullBuffer;
+        }
+
         const img = await Jimp.read(fullBuffer);
         const w = img.bitmap.width;
         const h = img.bitmap.height;
 
+        const topBarOffset = Math.round(h * 0.035);
+        const usableH = Math.round(h * 0.93);
+
         let cropX = 0;
-        let cropY = 0;
+        let cropY = topBarOffset;
         let cropW = w;
-        let cropH = h;
+        let cropH = usableH;
 
-        // Try exact CDP coordinates if available
-        const port = getDebuggingPort();
-        const cdpPartMap: Record<string, 'sidebar' | 'editor' | 'panel' | 'auxiliarybar'> = {
-            left: 'sidebar',
-            right: 'auxiliarybar',
-            editor: 'editor',
-            terminal: 'panel'
-        };
-        const cdpPart = cdpPartMap[zone];
-        let gotCdpRect = false;
-
-        if (cdpPart) {
-            try {
-                const rect = await getWorkbenchPartBoundingRect(port, cdpPart);
-                if (rect && rect.isOpen && rect.width > 50 && rect.height > 50) {
-                    if (rect.x + rect.width <= w && rect.y + rect.height <= h) {
-                        cropX = Math.max(0, rect.x);
-                        cropY = Math.max(0, rect.y);
-                        cropW = Math.min(w - cropX, rect.width);
-                        cropH = Math.min(h - cropY, rect.height);
-                        gotCdpRect = true;
-                    }
-                }
-            } catch (_) {}
-        }
-
-        // Layout proportion fallbacks based on Antigravity workspace structure
-        if (!gotCdpRect) {
-            const topBarOffset = Math.round(h * 0.035);
-            const usableH = Math.round(h * 0.93);
-
-            if (zone === 'left') {
-                cropX = 0;
-                cropY = topBarOffset;
-                cropW = Math.round(w * 0.23);
-                cropH = usableH;
-            } else if (zone === 'editor') {
-                cropX = Math.round(w * 0.23);
-                cropY = topBarOffset;
-                cropW = Math.round(w * 0.49);
-                cropH = Math.round(usableH * 0.65);
-            } else if (zone === 'terminal') {
-                cropX = Math.round(w * 0.23);
-                cropY = topBarOffset + Math.round(usableH * 0.65);
-                cropW = Math.round(w * 0.49);
-                cropH = Math.round(usableH * 0.35);
-            } else if (zone === 'right') {
-                cropX = Math.round(w * 0.72);
-                cropY = topBarOffset;
-                cropW = Math.round(w * 0.28);
-                cropH = usableH;
-            }
+        if (zone === 'left') {
+            cropX = 0;
+            cropY = topBarOffset;
+            cropW = Math.round(w * 0.23);
+            cropH = usableH;
+        } else if (zone === 'editor') {
+            cropX = Math.round(w * 0.23);
+            cropY = topBarOffset;
+            cropW = Math.round(w * 0.49);
+            cropH = Math.round(usableH * 0.65);
+        } else if (zone === 'terminal') {
+            cropX = Math.round(w * 0.23);
+            cropY = topBarOffset + Math.round(usableH * 0.65);
+            cropW = Math.round(w * 0.49);
+            cropH = Math.round(usableH * 0.35);
+        } else if (zone === 'right') {
+            cropX = Math.round(w * 0.72);
+            cropY = topBarOffset;
+            cropW = Math.round(w * 0.28);
+            cropH = usableH;
         }
 
         cropX = Math.max(0, Math.min(cropX, w - 10));
@@ -1002,9 +990,8 @@ async function captureZoneBuffer(zone: WorkspaceZone): Promise<Buffer> {
 
         img.crop({ x: cropX, y: cropY, w: cropW, h: cropH });
         return await img.getBuffer('image/jpeg');
-    } catch (e: any) {
-        console.warn('[Screenshot] Zone cropping failed, falling back to full desktop:', e.message);
-        return fullBuffer;
+    } catch (fallbackErr: any) {
+        throw new Error(`Screenshot failed: Please ensure Antigravity IDE is running with --remote-debugging-port=${port} (${fallbackErr.message})`);
     }
 }
 
@@ -2358,16 +2345,23 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
                 return;
             }
             const zone = ctx.match[1] as WorkspaceZone;
-            const meta = ZONE_METAS[zone];
             try { await ctx.answerCbQuery(); } catch (_) {}
 
-            if (meta.openCmd) {
-                try {
-                    await vscode.commands.executeCommand(meta.openCmd);
-                } catch (_) {}
-                // Allow UI time to render
-                await new Promise(res => setTimeout(res, 900));
+            if (zone === 'right') {
+                try { await vscode.commands.executeCommand('workbench.action.chat.open'); } catch (_) {}
+                try { await vscode.commands.executeCommand('workbench.action.focusAuxiliaryBar'); } catch (_) {}
+            } else if (zone === 'left') {
+                try { await vscode.commands.executeCommand('workbench.view.explorer'); } catch (_) {}
+                try { await vscode.commands.executeCommand('workbench.action.focusSideBar'); } catch (_) {}
+            } else if (zone === 'terminal') {
+                try { await vscode.commands.executeCommand('workbench.action.terminal.toggleTerminal'); } catch (_) {}
+                try { await vscode.commands.executeCommand('workbench.action.terminal.focus'); } catch (_) {}
+            } else if (zone === 'editor') {
+                try { await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup'); } catch (_) {}
             }
+
+            // Allow UI time to render
+            await new Promise(res => setTimeout(res, 800));
             await handleZoneScreenshot(ctx, zone);
         });
 
