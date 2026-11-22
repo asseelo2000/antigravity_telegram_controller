@@ -325,8 +325,7 @@ class WindowsStrategy implements PlatformStrategy {
     }
 
     getPortListCommand(pid: number): string {
-        const utf8Header = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ";
-        return `chcp 65001 >nul && powershell -NoProfile -Command "${utf8Header}$p = Get-NetTCPConnection -State Listen -OwningProcess ${pid} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort; if ($p) { $p | Sort-Object -Unique }"`;
+        return `chcp 65001 >nul && powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -OwningProcess ${pid} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort"`;
     }
 
     parseListeningPorts(stdout: string, _pid: number): number[] {
@@ -451,13 +450,19 @@ async function testPort(port: number, csrf_token: string): Promise<boolean> {
         const response = await httpRequest({
             hostname: '127.0.0.1',
             port,
-            path: '/exa.language_server_pb.LanguageServerService/GetUnleashData',
+            path: '/exa.language_server_pb.LanguageServerService/GetUserStatus',
             method: 'POST',
             headers: {
                 'X-Codeium-Csrf-Token': csrf_token,
                 'Connect-Protocol-Version': '1',
             },
-            body: JSON.stringify({ wrapper_data: {} }),
+            body: JSON.stringify({
+                metadata: {
+                    ideName: 'antigravity',
+                    extensionName: 'antigravity',
+                    locale: 'en',
+                },
+            }),
             timeout: 3000,
             allowFallback: true,
         });
@@ -594,45 +599,46 @@ export async function fetchQuotaInfo(lang: string = 'en'): Promise<QuotaSnapshot
         return 0;
     });
 
-    const info = sortedInfos[0];
-
-    // 3. Scan ports
-    const portCmd = strategy.getPortListCommand(info.pid);
-    let portOutput = '';
-    try {
-        const { stdout } = await executeCommand(portCmd);
-        portOutput = stdout;
-    } catch (e: any) {
-        throw new Error(`Failed to list ports for PID ${info.pid}: ${e.message}`);
-    }
-
-    let ports = strategy.parseListeningPorts(portOutput, info.pid);
-    if (info.extension_port > 0 && !ports.includes(info.extension_port)) {
-        ports = [info.extension_port, ...ports];
-    }
-
-    if (ports.length === 0) {
-        throw new Error(`No listening ports found for Antigravity process PID ${info.pid}.`);
-    }
-
-    // 4. Test ports to find the active API server
     let connectPort: number | null = null;
-    for (const port of ports) {
-        const working = await testPort(port, info.csrf_token);
-        if (working) {
-            connectPort = port;
+    let activeInfo: ProcessInfo | null = null;
+
+    for (const info of sortedInfos) {
+        let ports: number[] = [];
+        try {
+            const portCmd = strategy.getPortListCommand(info.pid);
+            const { stdout } = await executeCommand(portCmd);
+            ports = strategy.parseListeningPorts(stdout, info.pid);
+        } catch {
+            // port listing failed, proceed with extension_port if available
+        }
+
+        if (info.extension_port > 0 && !ports.includes(info.extension_port)) {
+            // Prioritize extension_port as it comes directly from the command line arguments
+            ports = [info.extension_port, ...ports];
+        }
+
+        for (const port of ports) {
+            const working = await testPort(port, info.csrf_token);
+            if (working) {
+                connectPort = port;
+                activeInfo = info;
+                break;
+            }
+        }
+
+        if (connectPort && activeInfo) {
             break;
         }
     }
 
-    if (!connectPort) {
+    if (!connectPort || !activeInfo) {
         throw new Error('Could not establish connection to the Antigravity API server on any listening port.');
     }
 
     // 5. Query user status & user quota summary in parallel
     const [statusData, quotaSummary] = await Promise.all([
-        requestUserStatus(connectPort, info.csrf_token),
-        requestUserQuotaSummary(connectPort, info.csrf_token),
+        requestUserStatus(connectPort, activeInfo.csrf_token),
+        requestUserQuotaSummary(connectPort, activeInfo.csrf_token),
     ]);
 
     if (!statusData || !statusData.userStatus) {

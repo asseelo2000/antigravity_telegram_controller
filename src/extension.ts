@@ -610,7 +610,17 @@ async function sendStatusDashboardToTelegram(chatId: string, loadingMessageId?: 
             msg += `  • 🔄 ${t('flowCreditsLabel') || 'Flow Credits'}: [${bar}] ${fc.remaining_percentage.toFixed(1)}%\n`;
         }
 
-        if (quota.models && quota.models.length > 0) {
+        if (quota.model_groups && quota.model_groups.length > 0) {
+            msg += `  • 🧠 ${isAr ? 'حدود النماذج:' : 'Model Limits:'}\n`;
+            for (const group of quota.model_groups) {
+                msg += `    *${group.title}:*\n`;
+                for (const limit of group.limits) {
+                    const bar = buildProgressBar(limit.remaining_percentage, 6);
+                    const resetNotice = limit.time_until_reset_formatted ? ` _(${limit.time_until_reset_formatted})_` : '';
+                    msg += `      - ${limit.name}: [${bar}] ${limit.remaining_percentage}%${resetNotice}\n`;
+                }
+            }
+        } else if (quota.models && quota.models.length > 0) {
             msg += `  • 🧠 ${isAr ? 'النماذج المتاحة:' : 'Top Model Limits:'}\n`;
             const topModels = quota.models.slice(0, 3);
             for (const m of topModels) {
@@ -2104,6 +2114,29 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
                             const fc = snapshot.flow_credits;
                             replyText += `⚡ Flow Credits: ${fc.available.toLocaleString()}/${fc.monthly.toLocaleString()} (${fc.remaining_percentage.toFixed(1)}%)\n`;
                         }
+
+                        replyText += '\n';
+
+                        if (snapshot.model_groups && snapshot.model_groups.length > 0) {
+                            for (const group of snapshot.model_groups) {
+                                replyText += `*${group.title}* ℹ️\n`;
+                                for (const limit of group.limits) {
+                                    const pctStr = `${limit.remaining_percentage}%`;
+                                    replyText += `  • *${limit.name}*: *${pctStr}*\n`;
+                                    if (limit.subtitle) {
+                                        replyText += `    _${limit.subtitle}_\n`;
+                                    }
+                                }
+                                replyText += `\n`;
+                            }
+                        } else if (snapshot.models && snapshot.models.length > 0) {
+                            replyText += `*${t('modelsTitle') || 'AI Models:'}*\n`;
+                            for (const model of snapshot.models) {
+                                const pct = model.remaining_percentage !== undefined ? `${model.remaining_percentage.toFixed(1)}%` : 'N/A';
+                                replyText += `• *${model.label}*: ${pct} (⏱ ${model.time_until_reset_formatted})\n`;
+                            }
+                        }
+
                         await bot!.telegram.editMessageText(ctx.chat!.id, msg.message_id, undefined, replyText, {
                             parse_mode: 'Markdown',
                             reply_markup: {
