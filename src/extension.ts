@@ -140,6 +140,54 @@ function getLanguage(): string {
     return vscode.workspace.getConfiguration('antigravityTelegramControl').get<string>('language') ?? 'en';
 }
 
+function escapeMarkdownText(text: string): string {
+    if (!text) return '';
+    return text.replace(/([_*`\[\]\\])/g, '\\$1');
+}
+
+function buildConversationsMessage(conversations: any[], isAr: boolean, activeIndex?: number): { message: string; plainMessage: string } {
+    let message = `📋 *${t('chatsTitle') || (isAr ? 'قائمة المحادثات' : 'Conversations')}*\n\n`;
+    let plainMessage = `📋 ${t('chatsTitle') || (isAr ? 'قائمة المحادثات' : 'Conversations')}\n\n`;
+
+    for (const c of conversations) {
+        const isCur = (activeIndex !== undefined ? c.index === activeIndex : c.isCurrent);
+        const badge = isCur ? (isAr ? ' 🟢 *(الحالية / Active)*' : ' 🟢 *(Active)*') : '';
+        const plainBadge = isCur ? (isAr ? ' 🟢 (الحالية / Active)' : ' 🟢 (Active)') : '';
+        const safeTitle = escapeMarkdownText(c.title);
+        const safeDetails = c.details ? escapeMarkdownText(c.details) : '';
+
+        message += `${c.index}. *${safeTitle}*${badge}\n`;
+        plainMessage += `${c.index}. ${c.title}${plainBadge}\n`;
+
+        if (c.details) {
+            message += `   ⏱️ ${safeDetails}\n`;
+            plainMessage += `   ⏱️ ${c.details}\n`;
+        }
+        message += '\n';
+        plainMessage += '\n';
+    }
+
+    const hint = `👉 *${t('switchChatHint') || (isAr ? 'للتبديل اكتب' : 'To switch: ')}* \`/switchchat <رقم>\``;
+    const plainHint = `👉 ${t('switchChatHint') || (isAr ? 'للتبديل اكتب' : 'To switch: ')} /switchchat <رقم>`;
+    message += hint;
+    plainMessage += plainHint;
+
+    return { message, plainMessage };
+}
+
+async function sendSafeReply(ctx: any, markdownText: string, plainText: string, replyMarkup: any) {
+    try {
+        return await ctx.reply(markdownText, {
+            parse_mode: 'Markdown',
+            reply_markup: replyMarkup
+        });
+    } catch (err: any) {
+        return await ctx.reply(plainText, {
+            reply_markup: replyMarkup
+        });
+    }
+}
+
 
 
 const SLASH_COMMANDS = [
@@ -1201,26 +1249,37 @@ async function handleExpandCommand(target: any): Promise<void> {
 
     if (typeof target !== 'string' && target?.answerCbQuery) {
         try {
-            await target.answerCbQuery(t('expandExpanding') || 'Expanding collapsed sections...');
+            await target.answerCbQuery(t('expandExpanding') || (isAr ? 'جاري توسيع خطوات وعمليات الوكيل...' : 'Expanding agent steps...'));
         } catch (_) {}
     }
 
     const port = getDebuggingPort();
-    const noticeMsg = await reply(t('expandExpanding') || '🔍 Expanding collapsed changes & steps...');
+    const noticeMsg = await reply(t('expandExpanding') || (isAr ? '🔍 جاري فحص وتوسيع خطوات وعمليات الوكيل في المحادثة...' : '🔍 Expanding agent execution steps in conversation...'));
 
     try {
-        const { expandedCount } = await expandAllChanges(port);
-        // Wait 800ms for UI expansion rendering
-        await new Promise(res => setTimeout(res, 800));
+        const { expandedCount, hasOperations } = await expandAllChanges(port);
+        // Wait 400ms for UI animation and expansion rendering
+        await new Promise(res => setTimeout(res, 400));
 
-        const captionText = expandedCount > 0
-            ? (t('expandSuccess', { count: expandedCount.toString() }) || `✅ Expanded ${expandedCount} section(s).`)
-            : (t('expandNothingFound') || 'ℹ️ Current view:');
+        let captionText = '';
+        if (expandedCount > 0) {
+            captionText = isAr
+                ? `✅ تم توسيع ${expandedCount} من خطوات وعمليات الوكيل بنجاح:`
+                : `✅ Expanded ${expandedCount} agent execution step(s):`;
+        } else if (hasOperations) {
+            captionText = isAr
+                ? `ℹ️ جميع خطوات وعمليات الوكيل في المحادثة موسعة بالفعل:`
+                : `ℹ️ All agent steps in the conversation are already expanded:`;
+        } else {
+            captionText = isAr
+                ? `ℹ️ لا توجد خطوات أو عمليات مطوية حالياً للوكيل في المحادثة المفتوحة.`
+                : `ℹ️ No collapsed agent operations found in the active conversation.`;
+        }
 
         const keyboard = [
             [
-                { text: t('expandGetText') || (isAr ? '📋 استخراج النص' : '📋 Extract Text'), callback_data: 'changes:get_text' },
-                { text: t('expandRefresh') || (isAr ? '🔄 تحديث' : '🔄 Refresh'), callback_data: 'changes:refresh' }
+                { text: isAr ? '🔄 تحديث اللقطة' : '🔄 Refresh View', callback_data: 'changes:refresh' },
+                { text: t('expandGetText') || (isAr ? '📋 استخراج التقرير' : '📋 Extract Text'), callback_data: 'changes:get_text' }
             ],
             [
                 { text: isAr ? '🎛️ لوحة الأوامر' : '🎛️ Command Center', callback_data: 'widget_home:main' }
@@ -1234,7 +1293,6 @@ async function handleExpandCommand(target: any): Promise<void> {
             }
             await sendTelegramPhoto(target, targetChatId, buffer, {
                 caption: captionText,
-                parseMode: 'Markdown',
                 replyMarkup: { inline_keyboard: keyboard }
             });
         } catch (screenshotErr: any) {
@@ -1245,7 +1303,6 @@ async function handleExpandCommand(target: any): Promise<void> {
             }
             await sendTelegramPhoto(target, targetChatId, fallbackBuffer, {
                 caption: captionText,
-                parseMode: 'Markdown',
                 replyMarkup: { inline_keyboard: keyboard }
             });
         }
@@ -2060,18 +2117,14 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
                             await ctx.reply(t('noChatsFound') || 'No conversations found.');
                             return;
                         }
-                        let message = `📋 *${t('chatsTitle') || 'Conversations'}*\n\n`;
-                        for (const c of conversations) {
-                            const badge = c.isCurrent ? ' 🟢 *(Active)*' : '';
-                            message += `${c.index}. *${c.title}*${badge}\n`;
-                        }
+                        const { message, plainMessage } = buildConversationsMessage(conversations, isAr);
                         const inlineButtons = conversations.slice(0, 10).map((c) => {
                             const prefix = c.isCurrent ? '🟢 ' : '';
                             const shortTitle = c.title.length > 22 ? c.title.substring(0, 19) + '...' : c.title;
                             return [{ text: `${prefix}${c.index}. ${shortTitle}`, callback_data: `switch_chat:${c.index}` }];
                         });
                         inlineButtons.push([{ text: isAr ? '🎛️ لوحة الأوامر' : '🎛️ Command Center', callback_data: 'widget_home:main' }]);
-                        await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: inlineButtons } });
+                        await sendSafeReply(ctx, message, plainMessage, { inline_keyboard: inlineButtons });
                     } catch (e: any) {
                         ctx.reply(t('error', { msg: e.message }));
                     }
@@ -2454,25 +2507,119 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
 
         // Helper function to execute switching to an Antigravity agent conversation
         async function handleSwitchConversation(ctx: any, port: number, target: number | string) {
+            let switchingMsg: any = null;
             try {
-                // Send temporary switching notification message
-                const switchingMsg = await ctx.reply(t('switchingToChat'));
+                // If this is a text command (not an inline callback), send temporary status message
+                if (!ctx.callbackQuery) {
+                    switchingMsg = await ctx.reply(t('switchingToChat'));
+                } else {
+                    try {
+                        await ctx.answerCbQuery(t('switchingToChat'));
+                    } catch (_) {}
+                }
+
                 // Trigger conversation switch via CDP
                 const result = await switchToConversation(port, target);
 
                 if (result.success) {
+                    const activeIndex = Number(result.index || target);
+                    const title = result.title || '';
+
+                    // Update the inline keyboard buttons and message text of the /chats list if invoked from inline button
+                    const targetMsg = ctx.callbackQuery?.message;
+                    if (targetMsg) {
+                        try {
+                            // Give IDE UI a moment to settle
+                            await new Promise(r => setTimeout(r, 350));
+                            let freshConversations = await getAgentConversationsList(port);
+
+                            if (!freshConversations || freshConversations.length === 0) {
+                                // Fallback: update buttons from existing reply_markup
+                                if (targetMsg.reply_markup?.inline_keyboard) {
+                                    const updatedKeyboard = targetMsg.reply_markup.inline_keyboard.map((row: any[]) => {
+                                        return row.map((btn: any) => {
+                                            if (!btn || !btn.callback_data) return btn;
+                                            if (btn.callback_data.startsWith('switch_chat:')) {
+                                                const btnIdx = parseInt(btn.callback_data.split(':')[1], 10);
+                                                const isTarget = btnIdx === activeIndex;
+                                                const cleanText = btn.text.replace(/^🟢\s*/, '');
+                                                return {
+                                                    ...btn,
+                                                    text: isTarget ? `🟢 ${cleanText}` : cleanText
+                                                };
+                                            }
+                                            return btn;
+                                        });
+                                    });
+                                    await ctx.editMessageReplyMarkup({ inline_keyboard: updatedKeyboard });
+                                }
+                            } else {
+                                const isAr = getLanguage() === 'ar';
+                                const { message, plainMessage } = buildConversationsMessage(freshConversations, isAr, activeIndex);
+
+                                const updatedButtons = freshConversations.slice(0, 10).map((c) => {
+                                    const isCur = (c.index === activeIndex) || c.isCurrent;
+                                    const prefix = isCur ? '🟢 ' : '';
+                                    const shortTitle = c.title.length > 22 ? c.title.substring(0, 19) + '...' : c.title;
+                                    return [{
+                                        text: `${prefix}${c.index}. ${shortTitle}`,
+                                        callback_data: `switch_chat:${c.index}`
+                                    }];
+                                });
+                                updatedButtons.push([{
+                                    text: isAr ? '🎛️ لوحة الأوامر' : '🎛️ Command Center',
+                                    callback_data: 'widget_home:main'
+                                }]);
+
+                                try {
+                                    await ctx.editMessageText(message, {
+                                        parse_mode: 'Markdown',
+                                        reply_markup: { inline_keyboard: updatedButtons }
+                                    });
+                                } catch (err: any) {
+                                    try {
+                                        await ctx.editMessageText(plainMessage, {
+                                            reply_markup: { inline_keyboard: updatedButtons }
+                                        });
+                                    } catch (_) {
+                                        try {
+                                            await ctx.editMessageReplyMarkup({ inline_keyboard: updatedButtons });
+                                        } catch (_) {}
+                                    }
+                                }
+                            }
+                        } catch (uiErr: any) {
+                            console.warn('[Telegram] Failed to update chats message markup:', uiErr.message);
+                        }
+                    }
+
                     // Check if the selected conversation is already the current active one
+                    const safeTitle = escapeMarkdownText(title);
                     if (result.isCurrent) {
-                        await ctx.reply(t('switchChatAlreadyActive', {
-                            index: (result.index || target).toString(),
-                            title: result.title || ''
-                        }), { parse_mode: 'Markdown' });
+                        try {
+                            await ctx.reply(t('switchChatAlreadyActive', {
+                                index: activeIndex.toString(),
+                                title: safeTitle
+                            }), { parse_mode: 'Markdown' });
+                        } catch (_) {
+                            await ctx.reply(t('switchChatAlreadyActive', {
+                                index: activeIndex.toString(),
+                                title: title
+                            }));
+                        }
                     } else {
                         // Send success confirmation message
-                        await ctx.reply(t('switchChatSuccess', {
-                            index: (result.index || target).toString(),
-                            title: result.title || ''
-                        }), { parse_mode: 'Markdown' });
+                        try {
+                            await ctx.reply(t('switchChatSuccess', {
+                                index: activeIndex.toString(),
+                                title: safeTitle
+                            }), { parse_mode: 'Markdown' });
+                        } catch (_) {
+                            await ctx.reply(t('switchChatSuccess', {
+                                index: activeIndex.toString(),
+                                title: title
+                            }));
+                        }
                     }
                 } else if (result.message === 'conversation_not_found') {
                     // Send conversation not found message
@@ -2521,17 +2668,8 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
                     return;
                 }
 
-                let message = `📋 *${t('chatsTitle')}*\n\n`;
-                for (const c of conversations) {
-                    const badge = c.isCurrent ? ' 🟢 *(الحالية / Active)*' : '';
-                    message += `${c.index}. *${c.title}*${badge}\n`;
-                    if (c.details) {
-                        message += `   ⏱️ ${c.details}\n`;
-                    }
-                    message += '\n';
-                }
-
-                message += `👉 *${t('switchChatHint')}* \`/switchchat <رقم>\``;
+                const isAr = getLanguage() === 'ar';
+                const { message, plainMessage } = buildConversationsMessage(conversations, isAr);
 
                 // Build inline keyboard buttons to allow switching with a single tap
                 const inlineButtons = conversations.slice(0, 10).map((c) => {
@@ -2542,13 +2680,12 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
                         callback_data: `switch_chat:${c.index}`
                     }];
                 });
+                inlineButtons.push([{
+                    text: isAr ? '🎛️ لوحة الأوامر' : '🎛️ Command Center',
+                    callback_data: 'widget_home:main'
+                }]);
 
-                await ctx.reply(message, {
-                    parse_mode: 'Markdown',
-                    reply_markup: {
-                        inline_keyboard: inlineButtons
-                    }
-                });
+                await sendSafeReply(ctx, message, plainMessage, { inline_keyboard: inlineButtons });
             } catch (e: any) {
                 console.error('[Telegram] Error in /chats command:', e);
                 ctx.reply(t('error', { msg: e.message }));
@@ -2577,12 +2714,8 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
                         return;
                     }
 
-                    let message = `📋 *${t('chatsTitle')}*\n\n`;
-                    for (const c of conversations) {
-                        const badge = c.isCurrent ? ' 🟢 *(الحالية / Active)*' : '';
-                        message += `${c.index}. *${c.title}*${badge}\n`;
-                    }
-                    message += `\n${t('switchChatUsage')}`;
+                    const isAr = getLanguage() === 'ar';
+                    const { message, plainMessage } = buildConversationsMessage(conversations, isAr);
 
                     // Create inline keyboard buttons for switching
                     const inlineButtons = conversations.slice(0, 10).map((c) => {
@@ -2593,13 +2726,12 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
                             callback_data: `switch_chat:${c.index}`
                         }];
                     });
+                    inlineButtons.push([{
+                        text: isAr ? '🎛️ لوحة الأوامر' : '🎛️ Command Center',
+                        callback_data: 'widget_home:main'
+                    }]);
 
-                    await ctx.reply(message, {
-                        parse_mode: 'Markdown',
-                        reply_markup: {
-                            inline_keyboard: inlineButtons
-                        }
-                    });
+                    await sendSafeReply(ctx, message, plainMessage, { inline_keyboard: inlineButtons });
                 } catch (e: any) {
                     ctx.reply(t('error', { msg: e.message }));
                 }

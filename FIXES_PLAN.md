@@ -13,7 +13,7 @@
 | 2 | Chats: direct execute & 1-tap buttons | ✅ مكتمل | `src/extension.ts` |
 | 3 | History: number buttons [5, 10, 15, 20] | ✅ مكتمل | `src/extension.ts` |
 | 4 | Question: direct execute & check pending | ✅ مكتمل | `src/extension.ts` |
-| 5 | Answer: interactive options buttons | ✅ مكتمل | `src/extension.ts` |
+| 5 | Answer: interactive options buttons | ✅ مكتمل | `sr c/extension.ts` |
 | 6 | Changes: direct execute without popup disruption | ✅ مكتمل | `src/extension.ts` |
 | 7 | Screenshot: full workspace desktop capture | ✅ مكتمل | `src/extension.ts` |
 | 8 | Check: direct execute without freezing | ✅ مكتمل | `src/extension.ts` |

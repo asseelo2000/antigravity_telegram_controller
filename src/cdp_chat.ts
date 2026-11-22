@@ -1571,6 +1571,8 @@ export async function switchToConversation(port: number, target: number | string
     const targets: CdpTarget[] = JSON.parse(raw);
     const candidates = getFilteredChatCandidates(targets);
 
+    let lastFailure: SwitchConversationResult | null = null;
+
     // Loop through each candidate target
     for (const targetItem of candidates) {
         try {
@@ -1585,6 +1587,13 @@ export async function switchToConversation(port: number, target: number | string
                     (async function() {
                         // Retrieve target parameter passed from Node context
                         const targetParam = ${JSON.stringify(target)};
+
+                        const isRowSelected = (r) => {
+                            return r.getAttribute('data-selected') === 'true' ||
+                                   r.getAttribute('aria-selected') === 'true' ||
+                                   r.classList.contains('selected') ||
+                                   r.classList.contains('active');
+                        };
 
                         // Strategy 1: New Antigravity 1.11.0+ embedded sidebar rows
                         const rawSidebarRows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
@@ -1622,7 +1631,7 @@ export async function switchToConversation(port: number, target: number | string
                                 return { success: false, message: 'conversation_not_found', totalConversations: uniqueRows.length };
                             }
 
-                            if (matched.row.getAttribute('data-selected') === 'true') {
+                            if (isRowSelected(matched.row)) {
                                 return { success: true, index: matchedIndex + 1, title: matched.title, isCurrent: true, isSidebarRow: true };
                             }
 
@@ -1640,18 +1649,46 @@ export async function switchToConversation(port: number, target: number | string
 
                             matched.row.scrollIntoView({ block: 'nearest' });
                             const clickTarget = matched.row.querySelector('a') || matched.row;
+                            clickTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                            clickTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
                             clickTarget.click();
-                            const rect = clickTarget.getBoundingClientRect();
+
+                            // Always dismiss the sidebar drawer and backdrop so only the conversation is visible
+                            await new Promise(r => setTimeout(r, 150));
+                            const dismissSidebar = () => {
+                                const backdrop = document.querySelector('[data-testid="sidebar-popover-backdrop"]');
+                                if (backdrop) {
+                                    const pk = Object.keys(backdrop).find(k => k.startsWith('__reactProps'));
+                                    if (pk && typeof backdrop[pk]?.onClick === 'function') {
+                                        try { backdrop[pk].onClick({ preventDefault() {}, stopPropagation() {} }); } catch (_) {}
+                                    }
+                                    try { backdrop.click(); } catch (_) {}
+                                }
+                                const closeBtn = document.querySelector('button[aria-label="Close Sidebar"]');
+                                if (closeBtn) {
+                                    const pk = Object.keys(closeBtn).find(k => k.startsWith('__reactProps'));
+                                    if (pk && typeof closeBtn[pk]?.onClick === 'function') {
+                                        try { closeBtn[pk].onClick({ preventDefault() {}, stopPropagation() {} }); } catch (_) {}
+                                    }
+                                    try { closeBtn.click(); } catch (_) {}
+                                }
+                                const toggle = document.querySelector('[data-testid="sidebar-toggle"]');
+                                if (toggle) {
+                                    const pk = Object.keys(toggle).find(k => k.startsWith('__reactProps'));
+                                    if (pk && typeof toggle[pk]?.onClick === 'function') {
+                                        try { toggle[pk].onClick({ preventDefault() {}, stopPropagation() {} }); } catch (_) {}
+                                    }
+                                    try { toggle.click(); } catch (_) {}
+                                }
+                            };
+                            dismissSidebar();
 
                             return {
                                 success: true,
                                 index: matchedIndex + 1,
                                 title: matched.title,
                                 isCurrent: false,
-                                isSidebarRow: true,
-                                sidebarWasToggled,
-                                x: Math.round(rect.x + rect.width / 2),
-                                y: Math.round(rect.y + rect.height / 2)
+                                isSidebarRow: true
                             };
                         }
 
@@ -1795,66 +1832,68 @@ export async function switchToConversation(port: number, target: number | string
             // Extract returned value from runtime evaluation
             const val = result?.result?.value;
 
-            // If conversation was found and is already current, return immediately
-            if (val && val.success && val.isCurrent) {
-                // Close connection to current CDP client
+            // Strategy 1 (sidebar row switch) or conversation is already current
+            if (val && val.success && (val.isSidebarRow || val.isCurrent)) {
+                try {
+                    await new Promise(r => setTimeout(r, 250));
+                    await client.send('Runtime.evaluate', {
+                        expression: `(() => {
+                            const backdrop = document.querySelector('[data-testid="sidebar-popover-backdrop"]');
+                            if (backdrop) backdrop.click();
+                            const list = document.querySelector('[data-testid="conversation-list-sidebar"]');
+                            if (list && list.getBoundingClientRect().x >= 0) {
+                                const toggle = document.querySelector('[data-testid="sidebar-toggle"]');
+                                if (toggle) toggle.click();
+                            }
+                        })()`
+                    });
+                } catch (_) { /* ignore if target context changed on navigation */ }
                 client.close();
-                return val;
+                return {
+                    success: true,
+                    index: val.index,
+                    title: val.title,
+                    isCurrent: val.isCurrent || false
+                };
             }
 
-            // If coordinates were returned, perform native hardware-level click and confirm prompt
+            // Strategy 2 (fast-pick legacy dropdown): hardware-level click & quick-pick prompt confirmation
             if (val && val.success && typeof val.x === 'number' && typeof val.y === 'number') {
-                // Dispatch mouse move to target row center
-                await client.send('Input.dispatchMouseEvent', {
-                    type: 'mouseMoved',
-                    x: val.x,
-                    y: val.y
-                });
+                try {
+                    // Dispatch mouse move to target row center
+                    await client.send('Input.dispatchMouseEvent', {
+                        type: 'mouseMoved',
+                        x: val.x,
+                        y: val.y
+                    });
 
-                // Short delay for hover styling trigger
-                await new Promise(r => setTimeout(r, 50));
+                    // Short delay for hover styling trigger
+                    await new Promise(r => setTimeout(r, 50));
 
-                // Dispatch mouse pressed event at button center
-                await client.send('Input.dispatchMouseEvent', {
-                    type: 'mousePressed',
-                    x: val.x,
-                    y: val.y,
-                    button: 'left',
-                    clickCount: 1
-                });
+                    // Dispatch mouse pressed event at button center
+                    await client.send('Input.dispatchMouseEvent', {
+                        type: 'mousePressed',
+                        x: val.x,
+                        y: val.y,
+                        button: 'left',
+                        clickCount: 1
+                    });
 
-                // Short delay between press and release
-                await new Promise(r => setTimeout(r, 80));
+                    // Short delay between press and release
+                    await new Promise(r => setTimeout(r, 80));
 
-                // Dispatch mouse released event at button center
-                await client.send('Input.dispatchMouseEvent', {
-                    type: 'mouseReleased',
-                    x: val.x,
-                    y: val.y,
-                    button: 'left',
-                    clickCount: 1
-                });
+                    // Dispatch mouse released event at button center
+                    await client.send('Input.dispatchMouseEvent', {
+                        type: 'mouseReleased',
+                        x: val.x,
+                        y: val.y,
+                        button: 'left',
+                        clickCount: 1
+                    });
 
-                if (val.isSidebarRow) {
-                    // Wait for route change and collapse sidebar drawer if we opened it
-                    await new Promise(r => setTimeout(r, 350));
-                    if (val.sidebarWasToggled) {
-                        await client.send('Runtime.evaluate', {
-                            expression: `(() => {
-                                const closeBtn = document.querySelector('button[aria-label="Close Sidebar"]');
-                                if (closeBtn) { closeBtn.click(); return; }
-                                const backdrop = document.querySelector('[data-testid="sidebar-popover-backdrop"]');
-                                if (backdrop) backdrop.click();
-                            })()`
-                        });
-                    }
-                } else {
-                    // Wait for workspace prompt (asking to open in current window / workspace)
-                    // Poll for the QuickPick prompt asking where to open the conversation
+                    // Poll for QuickPick prompt asking where to open the conversation
                     for (let attempt = 0; attempt < 12; attempt++) {
-                        // Poll interval between checks
                         await new Promise(r => setTimeout(r, 100));
-                        // Check if QuickPick prompt is open and get first option coordinates
                         const promptCheck = await client.send('Runtime.evaluate', {
                             expression: `
                                 (function() {
@@ -1877,10 +1916,8 @@ export async function switchToConversation(port: number, target: number | string
                             returnByValue: true
                         });
 
-                        // Check evaluation result
                         const promptVal = promptCheck?.result?.value;
                         if (promptVal && promptVal.visible) {
-                            // Dispatch Enter key to confirm first option ("Open in current window")
                             await client.send('Input.dispatchKeyEvent', {
                                 type: 'rawKeyDown',
                                 key: 'Enter',
@@ -1888,9 +1925,7 @@ export async function switchToConversation(port: number, target: number | string
                                 windowsVirtualKeyCode: 13,
                                 nativeVirtualKeyCode: 13
                             });
-                            // Short key press interval
                             await new Promise(r => setTimeout(r, 50));
-                            // Release Enter key
                             await client.send('Input.dispatchKeyEvent', {
                                 type: 'keyUp',
                                 key: 'Enter',
@@ -1898,47 +1933,17 @@ export async function switchToConversation(port: number, target: number | string
                                 windowsVirtualKeyCode: 13,
                                 nativeVirtualKeyCode: 13
                             });
-
-                            // Also perform hardware-level mouse click on the first option to ensure confirmation
-                            if (typeof promptVal.x === 'number' && typeof promptVal.y === 'number') {
-                                // Move mouse to first option
-                                await client.send('Input.dispatchMouseEvent', {
-                                    type: 'mouseMoved',
-                                    x: promptVal.x,
-                                    y: promptVal.y
-                                });
-                                // Mouse press on first option
-                                await client.send('Input.dispatchMouseEvent', {
-                                    type: 'mousePressed',
-                                    x: promptVal.x,
-                                    y: promptVal.y,
-                                    button: 'left',
-                                    clickCount: 1
-                                });
-                                // Short click interval
-                                await new Promise(r => setTimeout(r, 50));
-                                // Mouse release on first option
-                                await client.send('Input.dispatchMouseEvent', {
-                                    type: 'mouseReleased',
-                                    x: promptVal.x,
-                                    y: promptVal.y,
-                                    button: 'left',
-                                    clickCount: 1
-                                });
-                            }
-                            // Stop polling once confirmed
                             break;
                         }
                     }
+                } catch (inputErr: any) {
+                    console.warn('[CDP] Mouse dispatch error during Strategy 2 switch:', inputErr.message);
                 }
 
                 // Short pause for window navigation and UI to settle
-                await new Promise(r => setTimeout(r, 500));
-
-                // Close connection to current CDP client
+                await new Promise(r => setTimeout(r, 400));
                 client.close();
 
-                // Return success state
                 return {
                     success: true,
                     index: val.index,
@@ -1947,10 +1952,12 @@ export async function switchToConversation(port: number, target: number | string
                 };
             }
 
-            // Close connection to current CDP client if not successful
+            // Close connection to current CDP client
             client.close();
+
+            // Record failure from this candidate, but do not terminate early so remaining candidates can be attempted
             if (val && !val.success) {
-                return val;
+                lastFailure = val;
             }
         } catch (e: any) {
             // Log warning if an error occurs while evaluating in target
@@ -1958,8 +1965,8 @@ export async function switchToConversation(port: number, target: number | string
         }
     }
 
-    // Return failure when conversation could not be switched across any candidate targets
-    return { success: false, message: 'Failed to switch conversation via CDP.' };
+    // Return recorded failure or general failure message when conversation could not be switched across any candidates
+    return lastFailure || { success: false, message: 'Failed to switch conversation via CDP.' };
 }
 
 /**
@@ -3092,17 +3099,26 @@ export interface ChangesSnapshot {
     totalCount: number;
 }
 
+export interface ExpandChangesResult {
+    expandedCount: number;
+    success: boolean;
+    hasOperations: boolean;
+    lastStepText?: string;
+}
+
 /**
- * Expands collapsed changes, steps, diffs, and tool execution accordions in the active Antigravity chat.
- * Strictly scoped to agent turns to prevent opening context menus or unrelated IDE panels.
+ * Expands collapsed agent tool execution steps, accordion dropdowns, and activity rows in the active Antigravity chat.
+ * Strictly scoped to agent turns and execution accordions, with an explicit blacklist preventing accidental Undo, Revert, Pin, or Re-run clicks.
  */
-export async function expandAllChanges(port: number): Promise<{ expandedCount: number; success: boolean }> {
+export async function expandAllChanges(port: number): Promise<ExpandChangesResult> {
     try {
         const raw = await httpGet(`http://127.0.0.1:${port}/json`);
         const targets: CdpTarget[] = JSON.parse(raw);
         const candidates = getFilteredChatCandidates(targets);
 
         let totalExpanded = 0;
+        let anyOperations = false;
+        let lastStepText = '';
 
         for (const target of candidates) {
             try {
@@ -3111,109 +3127,141 @@ export async function expandAllChanges(port: number): Promise<{ expandedCount: n
 
                 const evalRes = await client.send('Runtime.evaluate', {
                     expression: `(() => {
-                        let count = 0;
-                        const isVisible = (el) => {
-                            if (!el) return false;
-                            const rect = el.getBoundingClientRect();
-                            return rect.width > 0 && rect.height > 0;
-                        };
-
-                        // Scope strictly to conversation area to prevent clicking menus or navigation tabs
-                        const root = document.querySelector('[data-testid="conversation-view"], #conversation, #chat, #cascade, .chat-container, .messages-container, [class*="message-list"]') || document.body;
-
-                        // Identify all assistant turns and tool step sections
-                        const turnContainers = root.querySelectorAll(
-                            '.role-assistant, [class*="agent-turn"], [class*="assistant-turn"], [class*="turn-item"], [data-testid="step-item"], [class*="tool-call"], [class*="step-container"]'
-                        );
-
-                        const searchRoots = turnContainers.length > 0 ? Array.from(turnContainers) : [root];
-
-                        searchRoots.forEach(scope => {
-                            // 1. Target standard HTML details elements inside agent messages
-                            const details = scope.querySelectorAll('details:not([open])');
-                            details.forEach(d => {
-                                try {
-                                    d.setAttribute('open', '');
-                                    const summary = d.querySelector('summary') || d;
-                                    summary.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                                    count++;
-                                } catch (_) {}
+                        // 1. Dismiss any accidental modal dialogs (such as Confirm Undo or Monaco alert)
+                        const dialogs = document.querySelectorAll('[role="dialog"], [role="alertdialog"], .monaco-dialog-box');
+                        dialogs.forEach(d => {
+                            const cancelBtn = Array.from(d.querySelectorAll('button')).find(b => {
+                                const t = (b.innerText || b.getAttribute('aria-label') || '').toLowerCase();
+                                return t === 'cancel' || t.includes('إلغاء');
                             });
-
-                            // 2. Target aria-expanded="false" or data-state="collapsed" strictly for tools/thoughts
-                            const collapsibles = scope.querySelectorAll(
-                                '[aria-expanded="false"], [data-state="collapsed"], [data-expanded="false"]'
-                            );
-                            collapsibles.forEach(el => {
-                                const role = el.getAttribute('role') || '';
-                                const hasPopup = el.getAttribute('aria-haspopup');
-                                const cls = (el.className || '').toString().toLowerCase();
-                                const title = (el.getAttribute('title') || '').toLowerCase();
-                                const text = (el.innerText || '').toLowerCase();
-
-                                // Strictly skip context menus, dropdowns, 3-dots, options buttons
-                                if (hasPopup || role === 'menu' || role === 'menuitem' || role === 'tab' || 
-                                    cls.includes('menu') || cls.includes('navbar') || cls.includes('dots') ||
-                                    title.includes('more') || title.includes('action') || title.includes('option')) {
-                                    return;
-                                }
-
-                                // Target only tool executions, steps, thought processes, file inspections
-                                const isRelevantStep = 
-                                    text.includes('worked for') || text.includes('explored') || 
-                                    text.includes('analyzed') || text.includes('thinking') || 
-                                    text.includes('command') || text.includes('step') ||
-                                    cls.includes('step') || cls.includes('tool') || cls.includes('accordion') ||
-                                    cls.includes('thought') || cls.includes('header');
-
-                                if (isRelevantStep || scope !== root) {
-                                    try {
-                                        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                                        count++;
-                                    } catch (_) {}
-                                }
-                            });
-
-                            // 3. Target chevron / arrow buttons specifically inside tool calls or step sections
-                            const chevrons = scope.querySelectorAll([
-                                '[class*="tool-call"] [class*="chevron-right"]',
-                                '[class*="tool-call"] [class*="codicon-chevron-right"]',
-                                '[class*="step"] [class*="chevron-right"]',
-                                '[class*="step"] svg',
-                                '[class*="toggle"][class*="collapsed"]',
-                                'button[aria-label*="step" i][aria-expanded="false"]',
-                                'button[aria-label*="tool" i][aria-expanded="false"]'
-                            ].join(', '));
-
-                            chevrons.forEach(ch => {
-                                const btn = ch.closest('button, [role="button"], summary') || ch;
-                                if (isVisible(btn) && !btn.getAttribute('aria-haspopup')) {
-                                    try {
-                                        btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                                        count++;
-                                    } catch (_) {}
-                                }
-                            });
+                            if (cancelBtn) {
+                                try { cancelBtn.click(); } catch (_) {}
+                            }
                         });
 
-                        return count;
+                        // 2. Dismiss sidebar popover drawer if open over conversation
+                        const backdrop = document.querySelector('[data-testid="sidebar-popover-backdrop"]');
+                        if (backdrop) {
+                            const pk = Object.keys(backdrop).find(k => k.startsWith('__reactProps'));
+                            if (pk && typeof backdrop[pk]?.onClick === 'function') {
+                                try { backdrop[pk].onClick({ preventDefault() {}, stopPropagation() {} }); } catch (_) {}
+                            }
+                            try { backdrop.click(); } catch (_) {}
+                        }
+
+                        // 3. Explicit blacklist: strictly avoid clicking any undo, revert, pin, delete, review or diff buttons
+                        const isForbidden = (el) => {
+                            if (!el) return true;
+                            const txt = (el.innerText || '').toLowerCase();
+                            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                            const title = (el.getAttribute('title') || '').toLowerCase();
+                            const testid = (el.getAttribute('data-testid') || '').toLowerCase();
+
+                            const forbiddenWords = [
+                                'undo', 'revert', 'pin', 'archive', 'more', 'settings', 'close',
+                                'cancel', 'confirm', 'delete', 'review', 'diff', 'feedback', 'copy',
+                                'regenerate', 'retry', 'stop', 'kebab', 'dots'
+                            ];
+                            for (const w of forbiddenWords) {
+                                if (aria.includes(w) || title.includes(w) || testid.includes(w)) return true;
+                                if (txt === w || (w === 'undo' && txt.includes('undo')) || (w === 'revert' && txt.includes('revert'))) return true;
+                            }
+                            if (el.closest('[role="dialog"], [role="alertdialog"], .monaco-dialog-box')) return true;
+                            return false;
+                        };
+
+                        let count = 0;
+                        let lastExpandedEl = null;
+
+                        // 4. Target agent execution accordions
+                        // Specifically: [data-testid="tool-group-collapsible"], [data-testid="worked-for-collapsible"], and aria-expanded="false" tool items
+                        const accordionSelectors = [
+                            '[data-testid="tool-group-collapsible"]',
+                            '[data-testid="worked-for-collapsible"]',
+                            '[data-testid*="collapsible"]'
+                        ].join(', ');
+
+                        const candidates = Array.from(document.querySelectorAll(accordionSelectors));
+
+                        candidates.forEach(el => {
+                            if (isForbidden(el)) return;
+                            const aria = el.getAttribute('aria-expanded');
+                            if (aria === 'false' || el.getAttribute('data-state') === 'collapsed') {
+                                try {
+                                    el.click();
+                                    count++;
+                                    lastExpandedEl = el;
+                                } catch (_) {}
+                            }
+                        });
+
+                        // 5. Also check any sub-steps inside tool groups that are collapsed
+                        const subStepCandidates = Array.from(document.querySelectorAll(
+                            '[class*="tool-call"] [aria-expanded="false"], [class*="step"] [aria-expanded="false"], div[role="button"][aria-expanded="false"]'
+                        ));
+                        subStepCandidates.forEach(el => {
+                            if (isForbidden(el)) return;
+                            if (!candidates.includes(el)) {
+                                try {
+                                    el.click();
+                                    count++;
+                                    if (!lastExpandedEl) lastExpandedEl = el;
+                                } catch (_) {}
+                            }
+                        });
+
+                        // 6. Scroll the expanded operations into view
+                        if (lastExpandedEl) {
+                            try {
+                                lastExpandedEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+                            } catch (_) {}
+                        } else {
+                            // If everything was already expanded, scroll to the last operation
+                            const existingOps = document.querySelectorAll('[data-testid="tool-group-collapsible"], [data-testid="worked-for-collapsible"]');
+                            if (existingOps.length > 0) {
+                                try {
+                                    existingOps[existingOps.length - 1].scrollIntoView({ behavior: 'instant', block: 'center' });
+                                } catch (_) {}
+                            }
+                        }
+
+                        const allOpsCount = document.querySelectorAll('[data-testid="tool-group-collapsible"], [data-testid="worked-for-collapsible"]').length;
+
+                        return {
+                            count,
+                            hasOperations: count > 0 || allOpsCount > 0,
+                            lastStepText: lastExpandedEl ? (lastExpandedEl.innerText || '').slice(0, 100) : ''
+                        };
                     })()`,
                     returnByValue: true
                 });
 
                 client.close();
 
-                const c = evalRes?.result?.value;
-                if (typeof c === 'number' && c > 0) {
-                    totalExpanded += c;
+                const val = evalRes?.result?.value;
+                if (val) {
+                    if (typeof val.count === 'number' && val.count > 0) {
+                        totalExpanded += val.count;
+                    }
+                    if (val.hasOperations) {
+                        anyOperations = true;
+                    }
+                    if (val.lastStepText) {
+                        lastStepText = val.lastStepText;
+                    }
                 }
             } catch (_) {}
         }
 
-        return { expandedCount: totalExpanded, success: true };
+        return {
+            expandedCount: totalExpanded,
+            success: true,
+            hasOperations: anyOperations,
+            lastStepText
+        };
     } catch (e: any) {
         console.warn('[CDP] expandAllChanges error:', e.message);
-        return { expandedCount: 0, success: false };
+        return { expandedCount: 0, success: false, hasOperations: false };
     }
 }
 
