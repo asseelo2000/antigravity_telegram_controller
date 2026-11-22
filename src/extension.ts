@@ -191,69 +191,64 @@ async function sendSafeReply(ctx: any, markdownText: string, plainText: string, 
 
 
 const SLASH_COMMANDS = [
-    { command: 'start', description: 'Start the bot and get your Chat ID' },
-    { command: 'menu', description: 'Interactive visual Command Center widget' },
-    { command: 'history', description: 'Fetch last N messages: /history [count]' },
-    { command: 'status', description: 'Unified dashboard: Quota, Agent, and System status' },
-    { command: 'search', description: 'Search bot commands: /search <query>' },
-    { command: 'screenshot', description: 'Capture a screenshot of the Antigravity agent' },
-    { command: 'help', description: 'Show available commands' },
-    { command: 'cmd', description: 'Execute shell command /cmd <command>' },
-    { command: 'ask', description: 'Send a message to the Antigravity agent chat' },
-    { command: 'check', description: 'Manually check if the agent has finished responding' },
-    // Command to check and answer pending Agent questions
-    { command: 'question', description: 'Check and answer pending questions from the Agent' },
-    // Command alias for question
-    { command: 'q', description: 'Check and answer pending questions from the Agent' },
-    { command: 'answer', description: 'Answer pending agent question: /answer <option or text>' },
-    { command: 'ans', description: 'Answer pending agent question: /ans <option or text>' },
-    { command: 'files', description: 'Browse project folders & download files: /files [path]' },
-    { command: 'getfile', description: 'Download project file to phone: /getfile <path or name>' },
-    { command: 'getclipboard', description: 'Send PC clipboard text to Telegram' },
-    { command: 'getlog', description: 'Send latest IDE or extension error log' },
-    { command: 'extensions', description: 'Sidebar extensions & views: /extensions' },
-    { command: 'ext', description: 'Sidebar extensions & views: /ext' },
-    { command: 'expand', description: 'Expand collapsed changes in chat & send screenshot: /expand' },
-    { command: 'changes', description: 'Extract list of files, commands & steps: /changes' },
-    { command: 'chats', description: 'List all Antigravity agent conversations' },
-    { command: 'chat', description: 'List all Antigravity agent conversations' },
-    { command: 'newchat', description: 'Start a new Antigravity agent conversation' },
-    { command: 'switchchat', description: 'Switch conversation: /switchchat <number or title>' },
-    { command: 'switch_chat', description: 'Switch conversation: /switch_chat <number or title>' },
-    // Command to list all available AI models
-    { command: 'models', description: 'List available AI models in Antigravity chat' },
-    // Command to list or switch AI model
-    { command: 'model', description: 'List or switch AI model: /model <number or name>' },
-    // Command to switch active AI model
-    { command: 'switchmodel', description: 'Switch active AI model: /switchmodel <number or name>' },
-    // Command alias to switch active AI model
-    { command: 'switch_model', description: 'Switch active AI model: /switch_model <number or name>' },
-    { command: 'recent', description: 'List and open recent folders/workspaces' },
-    // Command to create a clean ZIP backup of the workspace
-    { command: 'backup', description: 'Create and download a clean project ZIP backup' },
-    { command: 'stop', description: 'Stop the agent if it is currently generating' },
-    { command: 'alarm', description: 'Notify when Agent finishes responding (Long-poll)' },
-    // Command alias for alarm notifications
-    { command: 'alert', description: 'Notify when Agent finishes responding (alias of /alarm)' },
-    { command: 'quota', description: 'Show current prompt credits and model quota limits' },
-    { command: 'accounts', description: 'List all saved Google/Antigravity accounts' },
-    { command: 'switch', description: 'Switch account: /switch <id, email, or index>' },
-    { command: 'save_account', description: 'Save current account snapshot: /save_account [name]' },
-    { command: 'rotate_account', description: 'Rotate to the next available account' },
-    // Command to shut down the computer
-    { command: 'shutdown', description: 'Shut down computer: /shutdown [now or seconds]' },
-    // Command to restart the computer
-    { command: 'restart', description: 'Restart computer: /restart [now or seconds]' },
-    // Command to put computer to sleep
-    { command: 'sleep', description: 'Put computer into sleep mode: /sleep' },
-    // Command to lock workstation screen
-    { command: 'lock', description: 'Lock computer workstation screen: /lock' },
-    // Command to abort scheduled shutdown or restart
-    { command: 'abort', description: 'Abort any pending scheduled shutdown or restart' },
-    // Command to show system hardware and uptime
-    { command: 'sysinfo', description: 'Display system hardware, CPU, RAM, and uptime' },
-    // Quick action dashboard for PC controls
-    { command: 'pc', description: 'Open quick PC power and action dashboard' }
+    // ─── 1. Core Navigation & Fast Group Access (Ordered as requested) ───
+    { command: 'start', description: '🚀 Start the bot and get your Chat ID' },
+    { command: 'menu', description: '🎛️ Command Center (Interactive Widget)' },
+    { command: 'agent', description: '🤖 AI Agent: Chats, Ask, Questions, Expand' },
+    { command: 'monitoring', description: '📡 Monitoring: Status, Screenshots, Checks, Alarms' },
+    { command: 'projects', description: '📂 Files & Projects: Files, Logs, Backups, Views' },
+    { command: 'account', description: '💳 Account & Quota: Credits, Models, Switch Accounts' },
+    { command: 'system', description: '💻 System & PC: Terminal, Power, Sleep, Specs' },
+
+    // ─── 2. Monitoring & Diagnostic Commands ───
+    { command: 'status', description: '📊 Unified dashboard: Quota, Agent, and System status' },
+    { command: 'screenshot', description: '📸 Capture workspace zones or full screen' },
+    { command: 'history', description: '📜 Fetch last N messages: /history [count]' },
+    { command: 'check', description: '⏱️ Manually check if the agent has finished' },
+    { command: 'alarm', description: '🔔 Notify when agent finishes responding' },
+    { command: 'extensions', description: '🧩 Sidebar extensions & views: /extensions' },
+
+    // ─── 3. AI Agent Commands ───
+    { command: 'chats', description: '💬 List all Antigravity agent conversations' },
+    { command: 'newchat', description: '➕ Start a new Antigravity agent conversation' },
+    { command: 'switchchat', description: '🔄 Switch conversation: /switchchat <number>' },
+    { command: 'ask', description: '💬 Send a message to Antigravity agent: /ask <text>' },
+    { command: 'stop', description: '🛑 Stop agent generation immediately' },
+    { command: 'expand', description: '🔍 Expand collapsed agent execution steps' },
+    { command: 'changes', description: '📋 Extract list of modified files & steps' },
+    { command: 'question', description: '❓ Check and answer pending agent questions' },
+    { command: 'answer', description: '✍️ Answer pending agent question: /answer <text>' },
+
+    // ─── 4. Files & Projects Commands ───
+    { command: 'files', description: '📁 Browse project folders & download files' },
+    { command: 'getfile', description: '📥 Download project file to phone: /getfile <path>' },
+    { command: 'getclipboard', description: '📋 Send PC clipboard text to Telegram' },
+    { command: 'getlog', description: '📜 Send latest IDE or extension error log' },
+    { command: 'recent', description: '📂 List and open recent folders/workspaces' },
+    { command: 'backup', description: '📦 Create and download a clean project ZIP backup' },
+
+    // ─── 5. Account & Quota Commands ───
+    { command: 'quota', description: '💳 Show prompt credits and model quota limits' },
+    { command: 'models', description: '🧠 List available AI models in chat' },
+    { command: 'model', description: '🔄 Switch active AI model: /model <name>' },
+    { command: 'accounts', description: '👥 List all saved Antigravity accounts' },
+    { command: 'switch', description: '🔄 Switch active account: /switch <id>' },
+    { command: 'save_account', description: '💾 Save current account snapshot: /save_account' },
+    { command: 'rotate_account', description: '🔁 Rotate to the next available account' },
+
+    // ─── 6. System & PC Commands ───
+    { command: 'cmd', description: '⚡ Execute shell command in IDE: /cmd <command>' },
+    { command: 'pc', description: '💻 Open quick PC power and action dashboard' },
+    { command: 'sysinfo', description: '🖥️ Display hardware, CPU, RAM, and uptime' },
+    { command: 'lock', description: '🔒 Lock computer workstation screen' },
+    { command: 'sleep', description: '🌙 Put computer into sleep mode' },
+    { command: 'restart', description: '🔄 Restart computer: /restart [seconds]' },
+    { command: 'shutdown', description: '🔌 Shut down computer: /shutdown [seconds]' },
+    { command: 'abort', description: '🛑 Abort scheduled shutdown or restart' },
+
+    // ─── 7. General Utility Commands ───
+    { command: 'search', description: '🔍 Search bot commands: /search <query>' },
+    { command: 'help', description: '❓ Show available commands guide' }
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1745,6 +1740,32 @@ async function startBot(context: vscode.ExtensionContext): Promise<void> {
         bot.command(['menu', 'dashboard', 'commands'], async (ctx) => {
             if (allowedChatId && ctx.chat.id.toString() !== allowedChatId) { ctx.reply(t('unauthorized')); return; }
             await handleMenuCommand(ctx, undefined, undefined, false);
+        });
+
+        // Fast group navigation commands (Fix #22)
+        bot.command(['agent', 'ai'], async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) { ctx.reply(t('unauthorized')); return; }
+            await handleMenuCommand(ctx, 'ai', undefined, false);
+        });
+
+        bot.command(['monitoring', 'mon'], async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) { ctx.reply(t('unauthorized')); return; }
+            await handleMenuCommand(ctx, 'monitoring', undefined, false);
+        });
+
+        bot.command(['projects', 'files_projects'], async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) { ctx.reply(t('unauthorized')); return; }
+            await handleMenuCommand(ctx, 'files', undefined, false);
+        });
+
+        bot.command(['account', 'accounts_quota'], async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) { ctx.reply(t('unauthorized')); return; }
+            await handleMenuCommand(ctx, 'account', undefined, false);
+        });
+
+        bot.command(['system', 'system_pc'], async (ctx) => {
+            if (allowedChatId && ctx.chat?.id?.toString() !== allowedChatId) { ctx.reply(t('unauthorized')); return; }
+            await handleMenuCommand(ctx, 'system', undefined, false);
         });
 
         bot.command(['search', 'find'], async (ctx) => {
