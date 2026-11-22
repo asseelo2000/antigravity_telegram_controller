@@ -3,3 +3,4 @@ node_modules
 .vscode-test
 screenshot.jpg
 .DS_Store
+temp
